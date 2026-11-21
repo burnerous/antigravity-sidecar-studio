@@ -16,7 +16,7 @@
 
 > **English Summary**: **Sidecar Studio (`antigravity-sidecar-studio`)** is an offline-first auxiliary pane plugin for **Google Antigravity** (`SIDECAR_UI_ENTRYPOINT_AUX_PANE`). It combines a live **Workspace File Tree**, high-fidelity **Word / Excel / PPT / PDF / Markdown** preview & in-place editing (with instant quote-to-AI feedback and <2s auto-refresh), and a strict read-only **Conversation Trajectory Inspector** inside one unified dark-aurora sidebar. Jump directly to [Quick Start (Offline Zip / Source)](#-快速安装quick-start) or download the ready-to-use package from [GitHub Releases](https://github.com/burnerous/antigravity-sidecar-studio/releases/latest).
 
-> 🎬 **演示视频**：可在 **Bilibili** 搜索 **「Sidecar Studio」** 或关注 UP 主 **`Lu0H1N`** 查看完整功能演示（*视频发布后可将此行替换为具体 BV 链接*）。
+> 🎬 **演示视频**：[Antigravity侧边栏增强插件「Sidecar Studio」：告别繁琐的切屏，在侧边栏预览修改word、Excel、ppt！](https://www.bilibili.com/video/BV1SWyhzAE55/)（Bilibili · `BV1SWyhzAE55` · UP 主 **`Lu0H1N`**）
 
 ---
 
