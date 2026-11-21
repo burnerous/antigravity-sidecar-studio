@@ -1,0 +1,18 @@
+{
+  "name": "antigravity-sidecar-studio",
+  "displayName": "Sidecar Studio",
+  "description": "Google Antigravity 全局三合一侧边栏工作台：自动同步项目文件树、Word/Excel/PPT/PDF 离线高保真实时预览与编辑、划词引用发给 AI，以及只读对话轨迹查看器。",
+  "version": "1.0.0",
+  "author": {
+    "name": "Lu0H1N (burnerous)",
+    "url": "https://github.com/burnerous"
+  },
+  "homepage": "https://github.com/burnerous/antigravity-sidecar-studio",
+  "repository": "https://github.com/burnerous/antigravity-sidecar-studio",
+  "logo": "assets/logo.svg",
+  "suggestedPrompts": [
+    "打开 Sidecar Studio 预览本对话生成的最新文档",
+    "在侧边工作台浏览当前项目文件树",
+    "在 Sidecar Studio 中查看当前对话轨迹与工具调用详情"
+  ]
+}

@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128" fill="none">
+  <defs>
+    <linearGradient id="ws-grad" x1="16" y1="16" x2="112" y2="112" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#3B82F6" />
+      <stop offset="55%" stop-color="#6366F1" />
+      <stop offset="100%" stop-color="#14B8A6" />
+    </linearGradient>
+    <linearGradient id="ws-card" x1="48" y1="30" x2="102" y2="98" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#FFFFFF" stop-opacity="0.98" />
+      <stop offset="100%" stop-color="#E2E8F0" stop-opacity="0.95" />
+    </linearGradient>
+  </defs>
+  <!-- ~10% outer padding: frame sits inside x=14..114, y=14..114 -->
+  <rect x="14" y="14" width="100" height="100" rx="24" fill="url(#ws-grad)" />
+  <rect x="14" y="14" width="100" height="100" rx="24" stroke="#FFFFFF" stroke-opacity="0.22" stroke-width="2" />
+
+  <!-- Left tree rail -->
+  <rect x="25" y="28" width="22" height="72" rx="6" fill="#0F172A" fill-opacity="0.28" />
+  <circle cx="32" cy="39" r="2.6" fill="#93C5FD" />
+  <rect x="37" y="37" width="6" height="4" rx="2" fill="#E0F2FE" fill-opacity="0.9" />
+  <circle cx="32" cy="52" r="2.6" fill="#5EEAD4" />
+  <rect x="37" y="50" width="6" height="4" rx="2" fill="#E0F2FE" fill-opacity="0.85" />
+  <circle cx="32" cy="65" r="2.6" fill="#FCD34D" />
+  <rect x="37" y="63" width="6" height="4" rx="2" fill="#E0F2FE" fill-opacity="0.85" />
+  <circle cx="32" cy="78" r="2.6" fill="#FDA4AF" />
+  <rect x="37" y="76" width="6" height="4" rx="2" fill="#E0F2FE" fill-opacity="0.85" />
+
+  <!-- Main document preview card -->
+  <rect x="53" y="28" width="49" height="72" rx="8" fill="url(#ws-card)" />
+  <!-- Fold / header accent -->
+  <rect x="60" y="36" width="22" height="5" rx="2.5" fill="#4F46E5" />
+  <rect x="60" y="46" width="34" height="3.5" rx="1.75" fill="#64748B" fill-opacity="0.65" />
+  <rect x="60" y="53" width="29" height="3.5" rx="1.75" fill="#64748B" fill-opacity="0.5" />
+  <!-- Mini chart / table preview box -->
+  <rect x="60" y="62" width="35" height="22" rx="4" fill="#EEF2FF" stroke="#C7D2FE" stroke-width="1.5" />
+  <path d="M65 78 L72 71 L79 75 L88 66" stroke="#2563EB" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" />
+  <circle cx="88" cy="66" r="2.6" fill="#14B8A6" />
+  <!-- Trajectory badge at bottom-right -->
+  <circle cx="94" cy="91" r="8" fill="#0F172A" fill-opacity="0.85" />
+  <path d="M90.5 91 L93.2 93.7 L98 88.8" stroke="#34D399" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" />
+</svg>

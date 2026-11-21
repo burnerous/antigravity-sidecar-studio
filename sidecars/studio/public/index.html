@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' blob: data:; media-src 'none'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self' 'unsafe-inline'; worker-src 'self' blob:; connect-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none';">
+  <title>Sidecar Studio</title>
+  <script src="/preload.js"></script>
+  <script>
+    (function () {
+      function showStartupError(msg) {
+        try {
+          if (!msg || /ResizeObserver loop/i.test(String(msg))) return;
+          var box = document.getElementById('wsStartupError');
+          var txt = document.getElementById('wsStartupErrorText');
+          if (!box || !txt) return;
+          txt.textContent = 'Sidecar Studio 脚本错误: ' + msg;
+          box.classList.remove('is-hidden');
+        } catch (_) {}
+      }
+      window.addEventListener('error', function (e) {
+        var msg = e && (e.message || (e.error && e.error.message)) || 'Unknown error';
+        if (/ResizeObserver loop/i.test(String(msg))) return;
+        showStartupError(msg);
+      });
+      window.addEventListener('unhandledrejection', function (e) {
+        showStartupError(e && e.reason ? (e.reason.message || String(e.reason)) : 'Promise rejected');
+      });
+    })();
+  </script>
+  <link rel="stylesheet" href="/vendor/pdfjs/pdf_viewer.css">
+  <link id="hljs-theme" rel="stylesheet" href="/vendor/hljs-dark.css">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <div id="ws-app">
+    <div id="wsStartupError" class="is-hidden" style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 10px;background:#7f1d1d;color:#fecaca;font-size:11.5px;border-bottom:1px solid #ef4444;flex-shrink:0;">
+      <span id="wsStartupErrorText" style="min-width:0;overflow:hidden;text-overflow:ellipsis;"></span>
+      <button type="button" onclick="this.parentElement.classList.add('is-hidden')" style="border:none;background:transparent;color:#fecaca;cursor:pointer;font-size:14px;line-height:1;padding:0 4px;" aria-label="关闭错误提示">&times;</button>
+    </div>
+
+    <!-- Top Workbench Navigation Bar -->
+    <header class="ws-topbar">
+      <div class="ws-topbar-left">
+        <button id="toggleTreeBtn" class="ws-icon-btn" type="button" title="展开/收起文件树 (Ctrl+\\)" aria-label="切换文件树">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="2.5" width="12" height="11" rx="1.8"/>
+            <line x1="6" y1="2.5" x2="6" y2="13.5"/>
+          </svg>
+        </button>
+        <nav class="ws-mode-tabs" role="tablist" aria-label="工作台视图">
+          <button id="tabWorkbench" class="ws-mode-tab is-active" type="button" role="tab" aria-selected="true" data-mode="workbench">
+            <span class="ws-tab-icon" data-ws-icon="nav-workbench" data-size="15"></span><span>工作台</span>
+          </button>
+          <button id="tabTrajectory" class="ws-mode-tab" type="button" role="tab" aria-selected="false" data-mode="trajectory">
+            <span class="ws-tab-icon" data-ws-icon="nav-trajectory" data-size="15"></span><span>对话轨迹</span>
+            <span id="trajStepBadge" class="ws-badge is-hidden">0</span>
+          </button>
+        </nav>
+      </div>
+
+      <div class="ws-topbar-right">
+        <select id="rootSelector" class="ws-select is-hidden" title="切换工作区根目录" aria-label="切换工作区根目录"></select>
+        <button id="globalRefreshBtn" class="ws-icon-btn" type="button" title="手动刷新当前视图" aria-label="手动刷新">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M13.5 8a5.5 5.5 0 1 1-1.35-3.6"/>
+            <path d="M13.5 2.5v2.7h-2.7"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- Open Documents Tab Strip -->
+    <section id="producedStrip" class="ws-produced-strip" aria-label="打开的文档标签栏">
+      <div id="producedList" class="ws-produced-list" role="tablist" aria-label="打开的文档">
+        <span class="ws-produced-empty">暂无打开的文档</span>
+      </div>
+      <button id="producedFilterBtn" class="ws-chip-btn" type="button" title="切换显示仅文档或全部修改文件">仅看文档</button>
+    </section>
+
+    <!-- Workbench Main Split View -->
+    <main id="workbenchPane" class="ws-workbench">
+      <div id="drawerBackdrop" class="ws-drawer-backdrop"></div>
+
+      <!-- Left File Tree Sidebar / Drawer -->
+      <aside id="treePane" class="ws-tree-pane" aria-label="项目文件树">
+        <div class="ws-tree-toolbar">
+          <div class="ws-search-wrap">
+            <span class="ws-search-icon" data-ws-icon="ui-search" data-size="13"></span>
+            <input id="treeSearchInput" type="search" placeholder="搜索文件名或路径..." autocomplete="off" spellcheck="false">
+            <button id="treeSearchClearBtn" class="ws-clear-x is-hidden" type="button" title="清空搜索">&times;</button>
+          </div>
+          <button id="toggleIgnoredBtn" class="ws-icon-btn ws-btn-sm" type="button" title="显示/隐藏忽略目录 (.git, node_modules 等)">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M1.5 8s2.3-4.2 6.5-4.2S14.5 8 14.5 8s-2.3 4.2-6.5 4.2S1.5 8 1.5 8z"/>
+              <circle cx="8" cy="8" r="1.8"/>
+            </svg>
+          </button>
+          <button id="refreshTreeBtn" class="ws-icon-btn ws-btn-sm" type="button" title="刷新目录树">
+            <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M13.5 8a5.5 5.5 0 1 1-1.35-3.6"/>
+              <path d="M13.5 2.5v2.7h-2.7"/>
+            </svg>
+          </button>
+        </div>
+
+        <div id="treeRootMeta" class="ws-tree-meta">正在等待工作区同步...</div>
+
+        <div id="treeContainer" class="ws-tree-list" role="tree"></div>
+      </aside>
+
+      <!-- Draggable Resizer (Wide Mode) -->
+      <div id="paneSplitter" class="ws-splitter" role="separator" aria-orientation="vertical" title="拖动调整文件树宽度"></div>
+
+      <!-- Right Preview Pane -->
+      <section id="previewPane" class="ws-preview-pane" aria-label="文档预览区">
+        <div id="previewHeader" class="ws-preview-header is-hidden">
+          <div class="ws-preview-fileinfo">
+            <span id="previewFileIcon" class="ws-file-badge" data-ws-icon="other" data-size="22"></span>
+            <div class="ws-preview-titles">
+              <div id="previewFileName" class="ws-preview-filename"></div>
+              <div id="previewFilePath" class="ws-preview-filepath"></div>
+            </div>
+          </div>
+          <div class="ws-preview-actions">
+            <span id="previewEngineBadge" class="ws-status-pill is-hidden"></span>
+            <span id="previewLiveDot" class="ws-live-pill" title="已开启文件变更自动无感刷新">● 实时</span>
+            <button id="previewRefreshBtn" class="ws-icon-btn ws-btn-sm" type="button" title="重新加载当前文档">
+              <svg width="13" height="13" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M13.5 8a5.5 5.5 0 1 1-1.35-3.6"/>
+                <path d="M13.5 2.5v2.7h-2.7"/>
+              </svg>
+            </button>
+            <button id="previewOpenNativeBtn" class="ws-btn-ghost" type="button" title="在 Antigravity 原生标签页中打开">原生打开</button>
+            <button id="previewSendPathBtn" class="ws-btn-ghost" type="button" title="将此文件路径发送给当前对话">发路径</button>
+          </div>
+        </div>
+
+        <div id="previewSubtoolbar" class="ws-subtoolbar is-hidden"></div>
+
+        <div id="previewStage" class="ws-preview-stage">
+          <div id="previewEmptyState" class="ws-empty-welcome">
+            <div class="ws-empty-hero" data-ws-icon="hero-workspace" data-size="52"></div>
+            <h3>Sidecar Studio 三合一工作台</h3>
+            <p>从左侧文件树或上方文档标签栏点击任意文件即可实时高保真预览：<br>Word (<code>.docx</code>) · Excel (<code>.xlsx/.xls/.csv</code>) · PPT (<code>.pptx</code>) · PDF · Markdown · 图片 · 代码</p>
+            <div id="welcomeRecentDocs" class="ws-welcome-recents"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Conversation Trajectory View -->
+    <section id="trajectoryPane" class="ws-trajectory-pane is-hidden" aria-label="对话轨迹查看器">
+      <div class="ws-traj-toolbar">
+        <div class="ws-traj-toprow">
+          <div class="ws-traj-conv-wrap">
+            <span class="ws-traj-dot"></span>
+            <span id="trajConvLabel" class="ws-traj-conv-label">正在定位会话轨迹...</span>
+          </div>
+          <div class="ws-traj-controls">
+            <label class="ws-toggle-label" title="新步骤出现时自动滚动到底部">
+              <input id="trajFollowToggle" type="checkbox" checked>
+              <span>自动跟随</span>
+            </label>
+            <button id="trajRefreshBtn" class="ws-btn-ghost" type="button">刷新</button>
+          </div>
+        </div>
+
+        <div class="ws-traj-filters">
+          <div class="ws-traj-chips" id="trajFilterChips">
+            <button class="ws-chip-btn is-active" type="button" data-filter="all">全部</button>
+            <button class="ws-chip-btn" type="button" data-filter="user">用户输入</button>
+            <button class="ws-chip-btn" type="button" data-filter="assistant">模型回复</button>
+            <button class="ws-chip-btn" type="button" data-filter="thinking">思考过程</button>
+            <button class="ws-chip-btn" type="button" data-filter="tools">工具调用</button>
+            <button class="ws-chip-btn" type="button" data-filter="error">错误</button>
+          </div>
+          <div class="ws-search-wrap ws-traj-search">
+            <span class="ws-search-icon" data-ws-icon="ui-search" data-size="13"></span>
+            <input id="trajSearchInput" type="search" placeholder="筛选轨迹正文、思考或工具名..." autocomplete="off" spellcheck="false">
+          </div>
+        </div>
+      </div>
+
+      <div id="trajList" class="ws-traj-list">
+        <div class="ws-traj-empty">正在读取对话轨迹...</div>
+      </div>
+    </section>
+
+    <!-- File Tree Context Menu -->
+    <div id="treeContextMenu" class="ws-context-menu is-hidden" role="menu">
+      <button type="button" data-action="preview"><span data-ws-icon="ui-eye" data-size="14"></span><span>在预览区打开</span></button>
+      <button type="button" data-action="native"><span data-ws-icon="ui-external" data-size="14"></span><span>在 Antigravity 原生标签打开</span></button>
+      <hr>
+      <button type="button" data-action="copy-rel"><span data-ws-icon="ui-copy" data-size="14"></span><span>复制相对路径</span></button>
+      <button type="button" data-action="copy-abs"><span data-ws-icon="ui-copy" data-size="14"></span><span>复制绝对路径</span></button>
+      <button type="button" data-action="send-path"><span data-ws-icon="ui-quote" data-size="14"></span><span>发送文件路径给 AI</span></button>
+    </div>
+
+    <!-- Floating Selection Quote Button -->
+    <div id="quoteFab" class="ws-quote-fab is-hidden">
+      <button id="quoteFabBtn" type="button"><span data-ws-icon="ui-quote" data-size="13"></span><span>引用发给 AI</span></button>
+    </div>
+
+    <!-- Inline Quote Composer Modal -->
+    <div id="quoteModal" class="ws-modal-backdrop is-hidden" role="dialog" aria-modal="true" aria-labelledby="quoteModalTitle">
+      <div class="ws-modal">
+        <div class="ws-modal-header">
+          <h4 id="quoteModalTitle"><span data-ws-icon="ui-quote" data-size="15"></span><span>引用文档内容给 AI</span></h4>
+          <button id="quoteModalClose" class="ws-icon-btn ws-btn-sm" type="button" aria-label="关闭">&times;</button>
+        </div>
+        <div class="ws-modal-body">
+          <div id="quoteSourceMeta" class="ws-quote-meta"></div>
+          <pre id="quoteExcerptBox" class="ws-quote-excerpt"></pre>
+          <label class="ws-field-label" for="quoteCommentInput">附带修改意见或指令（可选）</label>
+          <textarea id="quoteCommentInput" rows="3" placeholder="例如：请把这一段改写得更精炼，或补充实证数据支持..."></textarea>
+        </div>
+        <div class="ws-modal-footer">
+          <button id="quoteCommentBtn" class="ws-btn-secondary" type="button" title="暂存为文档批注，随你在聊天框下一条消息一起发出"><span data-ws-icon="ui-note" data-size="13"></span><span>暂存为批注</span></button>
+          <button id="quoteSendBtn" class="ws-btn-primary" type="button"><span data-ws-icon="ui-send" data-size="13"></span><span>立即发给 AI</span></button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div id="wsToast" class="ws-toast is-hidden" role="status" aria-live="polite"></div>
+  </div>
+
+  <script src="/vendor/jszip.min.js"></script>
+  <script src="/vendor/docx-preview.min.js"></script>
+  <script src="/vendor/mammoth.browser.min.js"></script>
+  <script src="/vendor/xlsx.full.min.js"></script>
+  <script src="/vendor/marked.umd.js"></script>
+  <script src="/vendor/purify.min.js"></script>
+  <script src="/vendor/highlight.min.js"></script>
+  <script src="/vendor/pdfjs/pdf.min.js"></script>
+  <script src="/vendor/pdfjs/pdf.worker.min.js"></script>
+  <script src="/icons.js"></script>
+  <script src="/previewers/pdf-viewer.js"></script>
+  <script src="/previewers/docx-viewer.js"></script>
+  <script src="/previewers/xlsx-viewer.js"></script>
+  <script src="/previewers/pptx-viewer.js"></script>
+  <script src="/previewers/text-viewer.js"></script>
+  <script src="/trajectory-view.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

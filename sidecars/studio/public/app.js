@@ -1,0 +1,1320 @@
+(function (global) {
+  'use strict';
+
+  const {
+    renderDocxPreview,
+    renderPdfPreview,
+    renderPptxPreview,
+    renderTextOrImagePreview,
+    renderXlsxPreview,
+    createTrajectoryController,
+  } = global.WSModules || {};
+
+  const $ = (id) => document.getElementById(id);
+  const WSIcons = global.WSIcons;
+  if (WSIcons?.hydrate) WSIcons.hydrate(document);
+
+  function renderFileSvg(item, opts = {}) {
+    if (WSIcons?.renderFile) return WSIcons.renderFile(item, opts);
+    return '';
+  }
+
+  const state = {
+    mode: 'workbench',
+    roots: [],
+    activeRoot: '',
+    workspaceGen: 0,
+    workspaceRegSeq: 0,
+    lastRegisteredUrisKey: null,
+    showIgnored: false,
+    searchQuery: '',
+    expandedDirs: new Set(),
+    dirCache: new Map(),
+    watchRev: 0,
+    activeFile: null,
+    activeFileSig: '',
+    activeController: null,
+    activeCleanup: null,
+    previewOpenSeq: 0,
+    statPollInFlight: false,
+    pollTimers: [],
+    producedDocs: [],
+    producedOnlyDocs: true,
+    seenProducedPaths: new Set(),
+    openTabs: [],
+    dismissedPaths: new Map(),
+    hasUserClosedAll: false,
+    capabilities: {},
+    conversationId:
+      global.sidecar?.conversationId || new URLSearchParams(location.search).get('conversationId') || '',
+    pendingQuote: null,
+    contextTarget: null,
+  };
+
+  let toastTimer = null;
+  function showToast(msg, duration = 2200) {
+    const el = $('wsToast');
+    el.textContent = msg;
+    el.classList.remove('is-hidden');
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.add('is-hidden'), duration);
+  }
+
+  // ---------- Host Theme Sync ----------
+  function syncThemeScheme() {
+    const probe = document.createElement('span');
+    probe.style.cssText = 'position:absolute;visibility:hidden;color:var(--background, #0f1117)';
+    document.documentElement.appendChild(probe);
+    const c = getComputedStyle(probe).color;
+    probe.remove();
+    const nums = (c.match(/[\d.]+/g) || []).map(Number);
+    if (nums.length < 3) return;
+    const scale = c.startsWith('color(') ? 1 : 255;
+    const [r, g, b] = nums.slice(0, 3).map((v) => v / scale);
+    const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    const theme = lum < 0.5 ? 'dark' : 'light';
+    if (document.documentElement.dataset.theme !== theme) {
+      document.documentElement.dataset.theme = theme;
+      const hljsLink = $('hljs-theme');
+      if (hljsLink) {
+        hljsLink.href = theme === 'dark' ? '/vendor/hljs-dark.css' : '/vendor/hljs-light.css';
+      }
+    }
+  }
+
+  syncThemeScheme();
+  new MutationObserver(syncThemeScheme).observe(document.documentElement, {
+    attributes: true,
+    attributeFilter: ['style'],
+  });
+
+  // ---------- Helper HTTP wrappers ----------
+  function apiFetch(url, options) {
+    const f = global.sidecar && typeof global.sidecar.fetch === 'function'
+      ? global.sidecar.fetch.bind(global.sidecar)
+      : global.fetch.bind(global);
+    return f(url, options);
+  }
+
+  async function postJson(url, body) {
+    const res = await apiFetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(await res.text());
+    return res.json();
+  }
+
+  async function getJson(url) {
+    const res = await apiFetch(url, { method: 'GET' });
+    if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
+    return res.json();
+  }
+
+  function uint8ToBase64(bytes) {
+    const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+    const chunkSize = 0x8000;
+    const chunks = [];
+    for (let i = 0; i < arr.length; i += chunkSize) {
+      chunks.push(String.fromCharCode.apply(null, arr.subarray(i, i + chunkSize)));
+    }
+    return global.btoa(chunks.join(''));
+  }
+
+  global.WSModules = global.WSModules || {};
+  global.WSModules.uint8ToBase64 = uint8ToBase64;
+
+  function getFileIcon(item, opts = {}) {
+    return renderFileSvg(item, opts);
+  }
+
+  // ---------- Mode & Responsive Drawer ----------
+  const trajectoryCtrl = createTrajectoryController({
+    listEl: $('trajList'),
+    convLabelEl: $('trajConvLabel'),
+    badgeEl: $('trajStepBadge'),
+    followToggleEl: $('trajFollowToggle'),
+    filterChipsEl: $('trajFilterChips'),
+    searchInputEl: $('trajSearchInput'),
+    refreshBtnEl: $('trajRefreshBtn'),
+    getConversationId: () => state.conversationId,
+    onOpenFile: (file) => {
+      switchMode('workbench');
+      openFilePreview(file);
+    },
+    showToast,
+  });
+
+  function switchMode(mode) {
+    state.mode = mode;
+    $('tabWorkbench').classList.toggle('is-active', mode === 'workbench');
+    $('tabTrajectory').classList.toggle('is-active', mode === 'trajectory');
+    $('tabWorkbench').setAttribute('aria-selected', String(mode === 'workbench'));
+    $('tabTrajectory').setAttribute('aria-selected', String(mode === 'trajectory'));
+    $('workbenchPane').classList.toggle('is-hidden', mode !== 'workbench');
+    $('trajectoryPane').classList.toggle('is-hidden', mode !== 'trajectory');
+    trajectoryCtrl.setVisible(mode === 'trajectory');
+  }
+
+  $('tabWorkbench').addEventListener('click', () => switchMode('workbench'));
+  $('tabTrajectory').addEventListener('click', () => switchMode('trajectory'));
+
+  function setTreeCollapsed(collapsed) {
+    $('workbenchPane').classList.toggle('is-tree-collapsed', collapsed);
+    $('toggleTreeBtn').classList.toggle('is-active', !collapsed);
+  }
+
+  setTreeCollapsed(global.innerWidth < 520);
+
+  $('toggleTreeBtn').addEventListener('click', () => {
+    if (state.mode !== 'workbench') switchMode('workbench');
+    const next = !$('workbenchPane').classList.contains('is-tree-collapsed');
+    setTreeCollapsed(next);
+  });
+  global.addEventListener('keydown', (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === '\\') {
+      e.preventDefault();
+      if (state.mode !== 'workbench') switchMode('workbench');
+      const next = !$('workbenchPane').classList.contains('is-tree-collapsed');
+      setTreeCollapsed(next);
+    }
+  });
+  $('drawerBackdrop').addEventListener('click', () => setTreeCollapsed(true));
+
+  (function initSplitter() {
+    const splitter = $('paneSplitter');
+    const workbench = $('workbenchPane');
+    let dragging = false;
+    splitter.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      dragging = true;
+      splitter.classList.add('is-dragging');
+    });
+    global.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      const rect = workbench.getBoundingClientRect();
+      const w = Math.min(Math.max(e.clientX - rect.left, 150), 460);
+      workbench.style.setProperty('--ws-tree-width', `${Math.round(w)}px`);
+    });
+    global.addEventListener('mouseup', () => {
+      if (!dragging) return;
+      dragging = false;
+      splitter.classList.remove('is-dragging');
+    });
+  })();
+
+  // ---------- File Tree ----------
+  async function fetchDir(dirPath) {
+    if (!state.activeRoot) return [];
+    const data = await getJson(
+      `/api/workspace/tree?root=${encodeURIComponent(state.activeRoot)}&dir=${encodeURIComponent(
+        dirPath
+      )}&showIgnored=${state.showIgnored ? '1' : '0'}`
+    );
+    const items = data.items || [];
+    state.dirCache.set(dirPath, items);
+    return items;
+  }
+
+  function makeTreeRow(item, depth, isSearchResult = false) {
+    const row = document.createElement('div');
+    row.className = `ws-tree-row ${item.ignored ? 'is-ignored' : ''} ${
+      state.activeFile?.path === item.path ? 'is-active' : ''
+    }`;
+    row.dataset.path = item.path;
+    row.style.paddingLeft = `${8 + depth * 14}px`;
+    row.title = item.path;
+
+    const arrow = document.createElement('span');
+    arrow.className = 'ws-tree-arrow';
+    if (item.isDir && !isSearchResult) {
+      arrow.textContent = state.expandedDirs.has(item.path) ? '▾' : '▸';
+    }
+
+    const icon = document.createElement('span');
+    icon.className = 'ws-tree-icon';
+    const isExpanded = Boolean(item.isDir && !isSearchResult && state.expandedDirs.has(item.path));
+    icon.innerHTML = getFileIcon(item, { size: 17, expanded: isExpanded });
+
+    const name = document.createElement('span');
+    name.className = 'ws-tree-name';
+    name.textContent = item.name;
+
+    row.append(arrow, icon, name);
+
+    if (isSearchResult && item.relPath !== item.name) {
+      const sub = document.createElement('span');
+      sub.className = 'ws-tree-sub';
+      sub.textContent = item.relPath;
+      row.appendChild(sub);
+    }
+
+    if (!item.isDir) {
+      const actions = document.createElement('div');
+      actions.className = 'ws-tree-row-actions';
+
+      const btnNative = document.createElement('button');
+      btnNative.type = 'button';
+      btnNative.className = 'ws-tree-mini-btn';
+      btnNative.textContent = '原生';
+      btnNative.title = '在 Antigravity 原生标签页打开';
+      btnNative.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openInNativeTab(item);
+      });
+
+      const btnSend = document.createElement('button');
+      btnSend.type = 'button';
+      btnSend.className = 'ws-tree-mini-btn';
+      btnSend.textContent = '引用';
+      btnSend.title = '发送文件路径给 AI';
+      btnSend.addEventListener('click', (e) => {
+        e.stopPropagation();
+        sendFilePathToAgent(item);
+      });
+
+      actions.append(btnNative, btnSend);
+      row.appendChild(actions);
+    }
+
+    row.addEventListener('click', async () => {
+      if (item.isDir) {
+        if (state.expandedDirs.has(item.path)) {
+          state.expandedDirs.delete(item.path);
+        } else {
+          state.expandedDirs.add(item.path);
+          if (!state.dirCache.has(item.path)) {
+            await fetchDir(item.path);
+          }
+        }
+        renderTree();
+      } else {
+        await openFilePreview(item);
+        if (global.innerWidth < 520) {
+          setTreeCollapsed(true);
+        }
+      }
+    });
+
+    row.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      if (item.isDir) return;
+      showContextMenu(e.clientX, e.clientY, item);
+    });
+
+    return row;
+  }
+
+  function renderDirNodes(container, dirPath, depth) {
+    const items = state.dirCache.get(dirPath) || [];
+    for (const item of items) {
+      container.appendChild(makeTreeRow(item, depth, false));
+      if (item.isDir && state.expandedDirs.has(item.path)) {
+        renderDirNodes(container, item.path, depth + 1);
+      }
+    }
+  }
+
+  async function renderTree() {
+    const container = $('treeContainer');
+    container.innerHTML = '';
+
+    if (!state.activeRoot) {
+      $('treeRootMeta').textContent = '未检测到打开的工作区';
+      container.innerHTML =
+        '<div class="ws-tree-empty">当前对话未绑定工作区目录；有文件打开时将显示在上方标签栏。</div>';
+      return;
+    }
+
+    const rootObj = state.roots.find((r) => r.path === state.activeRoot);
+    $('treeRootMeta').textContent = `根目录: ${rootObj?.name || state.activeRoot}`;
+    $('treeRootMeta').title = state.activeRoot;
+
+    if (state.searchQuery) {
+      try {
+        const res = await getJson(
+          `/api/workspace/search?root=${encodeURIComponent(state.activeRoot)}&q=${encodeURIComponent(
+            state.searchQuery
+          )}&showIgnored=${state.showIgnored ? '1' : '0'}`
+        );
+        const items = res.items || [];
+        if (!items.length) {
+          container.innerHTML = '<div class="ws-tree-empty">没有匹配的文件</div>';
+          return;
+        }
+        for (const item of items) {
+          container.appendChild(makeTreeRow(item, 0, true));
+        }
+        if (res.truncated) {
+          const note = document.createElement('div');
+          note.className = 'ws-tree-empty';
+          note.textContent = `已显示前 ${items.length} 条匹配（共扫描 ${res.scanned} 项）`;
+          container.appendChild(note);
+        }
+      } catch (err) {
+        container.innerHTML = `<div class="ws-tree-empty">搜索失败: ${err.message}</div>`;
+      }
+      return;
+    }
+
+    if (!state.dirCache.has(state.activeRoot)) {
+      await fetchDir(state.activeRoot);
+    }
+    const rootItems = state.dirCache.get(state.activeRoot) || [];
+    if (!rootItems.length) {
+      container.innerHTML = '<div class="ws-tree-empty">目录为空</div>';
+      return;
+    }
+    renderDirNodes(container, state.activeRoot, 0);
+    renderWelcomeRecents(rootItems);
+  }
+
+  function renderWelcomeRecents(rootItems) {
+    const wrap = $('welcomeRecentDocs');
+    if (!wrap || state.activeFile) return;
+    const docs = rootItems.filter(
+      (i) => !i.isDir && ['docx', 'xlsx', 'pptx', 'pdf', 'markdown'].includes(i.category)
+    );
+    wrap.innerHTML = '';
+    for (const doc of docs.slice(0, 6)) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'ws-doc-pill';
+      const ic = document.createElement('span');
+      ic.className = 'ws-pill-icon';
+      ic.innerHTML = getFileIcon(doc, { size: 15 });
+      const lbl = document.createElement('span');
+      lbl.className = 'ws-doc-pill-name';
+      lbl.textContent = doc.name;
+      btn.append(ic, lbl);
+      btn.addEventListener('click', () => openFilePreview(doc));
+      wrap.appendChild(btn);
+    }
+  }
+
+  async function reloadExpandedDirs() {
+    if (!state.activeRoot) return;
+    const dirs = [state.activeRoot, ...Array.from(state.expandedDirs)];
+    state.dirCache.clear();
+    for (const d of dirs) {
+      try {
+        await fetchDir(d);
+      } catch {
+        state.expandedDirs.delete(d);
+      }
+    }
+    await renderTree();
+  }
+
+  let searchDebounce = null;
+  $('treeSearchInput').addEventListener('input', (e) => {
+    state.searchQuery = e.target.value.trim();
+    $('treeSearchClearBtn').classList.toggle('is-hidden', !state.searchQuery);
+    if (searchDebounce) clearTimeout(searchDebounce);
+    searchDebounce = setTimeout(renderTree, 180);
+  });
+  $('treeSearchClearBtn').addEventListener('click', () => {
+    $('treeSearchInput').value = '';
+    state.searchQuery = '';
+    $('treeSearchClearBtn').classList.add('is-hidden');
+    renderTree();
+  });
+  $('toggleIgnoredBtn').addEventListener('click', () => {
+    state.showIgnored = !state.showIgnored;
+    $('toggleIgnoredBtn').classList.toggle('is-active', state.showIgnored);
+    reloadExpandedDirs();
+  });
+  $('refreshTreeBtn').addEventListener('click', reloadExpandedDirs);
+
+  // ---------- Context Menu & File Actions ----------
+  function showContextMenu(x, y, item) {
+    state.contextTarget = item;
+    const menu = $('treeContextMenu');
+    menu.classList.remove('is-hidden');
+    const maxX = global.innerWidth - 205;
+    const maxY = global.innerHeight - 175;
+    menu.style.left = `${Math.max(6, Math.min(x, maxX))}px`;
+    menu.style.top = `${Math.max(6, Math.min(y, maxY))}px`;
+  }
+
+  document.addEventListener('click', () => $('treeContextMenu').classList.add('is-hidden'));
+
+  $('treeContextMenu').addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-action]');
+    if (!btn || !state.contextTarget) return;
+    const item = state.contextTarget;
+    const act = btn.dataset.action;
+    if (act === 'preview') {
+      await openFilePreview(item);
+    } else if (act === 'native') {
+      openInNativeTab(item);
+    } else if (act === 'copy-rel') {
+      await copyText(item.relPath || item.name, '已复制相对路径');
+    } else if (act === 'copy-abs') {
+      await copyText(item.path, '已复制绝对路径');
+    } else if (act === 'send-path') {
+      await sendFilePathToAgent(item);
+    }
+  });
+
+  async function copyText(txt, toastLabel) {
+    try {
+      await navigator.clipboard.writeText(txt);
+      showToast(toastLabel);
+    } catch {
+      showToast('剪贴板写入受限');
+    }
+  }
+
+  function openInNativeTab(file) {
+    if (!file?.uri) return;
+    if (global.sidecar?.ui?.toggleAuxPane) {
+      global.sidecar.ui.toggleAuxPane({ tabType: 'fileView', uri: file.uri });
+      showToast(`已请求原生打开 ${file.name}`);
+    } else {
+      showToast('当前独立浏览器模式不支持原生标签页打开');
+    }
+  }
+
+  async function sendToAgent(message) {
+    try {
+      if (global.sidecar?.agent?.sendMessage && state.conversationId) {
+        await global.sidecar.agent.sendMessage(message, state.conversationId);
+      } else {
+        await postJson('/api/agent/send', {
+          message,
+          conversationId: state.conversationId,
+        });
+      }
+      showToast('已发送给当前对话');
+    } catch (err) {
+      showToast(`发送失败: ${err.message}`);
+    }
+  }
+
+  async function sendFilePathToAgent(file) {
+    const loc = file.relPath || file.path;
+    await sendToAgent(`请查看文件 \`${loc}\`（路径：\`${file.path}\`）`);
+  }
+
+  function pathKey(p) {
+    const raw = String(p || '');
+    const isWin = /^[a-zA-Z]:[\\/]|^\\\\/.test(raw) || raw.includes('\\');
+    const norm = raw.replace(/\\/g, '/');
+    return isWin ? norm.toLowerCase() : norm;
+  }
+
+  function isPathDismissed(doc) {
+    const dismissedMtime = state.dismissedPaths.get(pathKey(doc?.path));
+    if (dismissedMtime === undefined) return false;
+    return Math.floor(doc?.mtimeMs || 0) <= dismissedMtime;
+  }
+
+  function upsertOpenTab(file) {
+    if (!file?.path) return;
+    const key = pathKey(file.path);
+    const idx = state.openTabs.findIndex((t) => pathKey(t.path) === key);
+    if (idx >= 0) {
+      state.openTabs[idx] = { ...state.openTabs[idx], ...file };
+    } else {
+      state.openTabs.push({ ...file });
+    }
+  }
+
+  async function confirmDiscardIfDirty() {
+    const ctrl = state.activeController;
+    if (!ctrl?.isDirty?.()) return true;
+    if (ctrl.flushSave && ctrl.isAutoSave?.()) {
+      try {
+        await ctrl.flushSave({ silent: true });
+      } catch {}
+    }
+    if (!ctrl.isDirty?.()) return true;
+    return global.confirm('当前文件有未保存的修改，确定放弃修改并继续吗？');
+  }
+
+  // ---------- Document Preview Engine ----------
+  async function openFilePreview(file, { preserveState = false, skipDirtyCheck = false } = {}) {
+    if (!file?.path) return;
+
+    if (!skipDirtyCheck && state.activeController?.isDirty?.()) {
+      const ok = await confirmDiscardIfDirty();
+      if (!ok) return;
+    }
+
+    const openSeq = ++state.previewOpenSeq;
+
+    state.dismissedPaths.delete(pathKey(file.path));
+    state.hasUserClosedAll = false;
+    upsertOpenTab(file);
+
+    const prevState =
+      preserveState && state.activeFile && pathKey(state.activeFile.path) === pathKey(file.path) && state.activeController?.getState
+        ? state.activeController.getState()
+        : null;
+
+    if (state.activeController?.destroy) {
+      try {
+        state.activeController.destroy();
+      } catch {}
+      state.activeController = null;
+    }
+    if (state.activeCleanup) {
+      try {
+        state.activeCleanup();
+      } catch {}
+      state.activeCleanup = null;
+    }
+
+    const cleanups = [];
+    let cleanedUp = false;
+    const runCleanups = () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      while (cleanups.length) {
+        try {
+          cleanups.pop()();
+        } catch {}
+      }
+    };
+    state.activeCleanup = runCleanups;
+
+    if (!file.mtimeMs || !file.version) {
+      try {
+        const stData = await getJson(
+          `/api/file/stat?path=${encodeURIComponent(file.path)}&conversationId=${encodeURIComponent(
+            state.conversationId || ''
+          )}&workspaceGen=${encodeURIComponent(String(state.workspaceGen))}`
+        );
+        if (openSeq !== state.previewOpenSeq) {
+          runCleanups();
+          return;
+        }
+        if (stData?.success && stData.exists) {
+          file.mtimeMs = stData.mtimeMs;
+          file.size = stData.size;
+          file.version = stData.version || '';
+          upsertOpenTab(file);
+        }
+      } catch {
+        if (openSeq !== state.previewOpenSeq) {
+          runCleanups();
+          return;
+        }
+      }
+    }
+
+    state.activeFile = file;
+    state.activeFileSig = file.version || `${Math.floor(file.mtimeMs || 0)}:${file.size || 0}`;
+
+    $('previewHeader').classList.remove('is-hidden');
+    $('previewFileIcon').innerHTML = getFileIcon(file, { size: 22 });
+    $('previewFileName').textContent = file.name;
+    $('previewFilePath').textContent = file.relPath || file.path;
+    $('previewFilePath').title = file.path;
+
+    const badge = $('previewEngineBadge');
+    badge.classList.add('is-hidden');
+    badge.textContent = '';
+
+    const subtoolbar = $('previewSubtoolbar');
+    subtoolbar.classList.add('is-hidden');
+    subtoolbar.innerHTML = '';
+
+    const stage = $('previewStage');
+    stage.innerHTML = '<div class="ws-empty-welcome"><p>正在加载预览...</p></div>';
+
+    for (const row of document.querySelectorAll('.ws-tree-row')) {
+      row.classList.toggle('is-active', row.dataset.path === file.path);
+    }
+    renderProducedStrip();
+
+    const saveFile = async ({
+      content,
+      encoding = 'utf8',
+      force = false,
+      expectedConflictMtimeMs = null,
+      expectedConflictVersion = '',
+      silent = false,
+    } = {}) => {
+      try {
+        const activeMatches =
+          state.activeFile && pathKey(state.activeFile.path) === pathKey(file.path);
+        const currentMtime = activeMatches ? state.activeFile.mtimeMs : file.mtimeMs;
+        const currentVersion = activeMatches
+          ? state.activeFile.version || file.version || ''
+          : file.version || '';
+        const payload = {
+          path: file.path,
+          conversationId: state.conversationId,
+          workspaceGen: state.workspaceGen,
+          content,
+          encoding,
+          baseMtimeMs: currentMtime,
+          baseVersion: currentVersion,
+          force,
+        };
+        if (force) {
+          if (expectedConflictMtimeMs != null) {
+            payload.expectedConflictMtimeMs = expectedConflictMtimeMs;
+          }
+          if (expectedConflictVersion) {
+            payload.expectedConflictVersion = expectedConflictVersion;
+          }
+        }
+        const res = await apiFetch('/api/file/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        let resData = null;
+        try {
+          resData = await res.json();
+        } catch {}
+
+        if (res.status === 409 && !force) {
+          const conflictMtime = resData?.currentMtimeMs ?? null;
+          const conflictVersion = resData?.currentVersion || '';
+          const ok = global.confirm(
+            '该文件在编辑期间已被外部或 AI 更新，是否仍用当前修改覆盖保存？'
+          );
+          if (ok) {
+            return saveFile({
+              content,
+              encoding,
+              force: true,
+              expectedConflictMtimeMs: conflictMtime,
+              expectedConflictVersion: conflictVersion,
+              silent,
+            });
+          }
+          return { success: false, cancelled: true };
+        }
+
+        if (!res.ok || !resData?.success) {
+          const errMsg = resData?.error || `HTTP ${res.status}`;
+          showToast(`保存失败: ${errMsg}`, 2800);
+          return { success: false, error: errMsg };
+        }
+
+        file.mtimeMs = resData.mtimeMs;
+        file.size = resData.size;
+        file.version = resData.version || '';
+        if (state.activeFile && pathKey(state.activeFile.path) === pathKey(file.path)) {
+          state.activeFile.mtimeMs = resData.mtimeMs;
+          state.activeFile.size = resData.size;
+          state.activeFile.version = resData.version || '';
+          state.activeFileSig =
+            resData.version || `${Math.floor(resData.mtimeMs || 0)}:${resData.size || 0}`;
+          upsertOpenTab(state.activeFile);
+        }
+        if (!silent) {
+          showToast(`已保存：${file.name}`, 1600);
+        }
+        return resData;
+      } catch (err) {
+        const msg = err?.message || String(err);
+        showToast(`保存失败: ${msg}`, 2800);
+        return { success: false, error: msg };
+      }
+    };
+
+    const ctx = {
+      file,
+      stageEl: stage,
+      toolbarEl: subtoolbar,
+      capabilities: state.capabilities,
+      conversationId: state.conversationId,
+      getWorkspaceGen: () => state.workspaceGen,
+      prevState,
+      showToast,
+      isStale: () => openSeq !== state.previewOpenSeq,
+      registerCleanup: (fn) => {
+        if (typeof fn !== 'function') return;
+        if (cleanedUp || openSeq !== state.previewOpenSeq) {
+          try {
+            fn();
+          } catch {}
+          return;
+        }
+        cleanups.push(fn);
+      },
+      onSaveFile: saveFile,
+      onStatusBadge: (label) => {
+        if (openSeq !== state.previewOpenSeq) return;
+        if (label) {
+          badge.textContent = label;
+          badge.classList.remove('is-hidden');
+        } else {
+          badge.classList.add('is-hidden');
+        }
+      },
+      onQuoteRequest: ({ text, locationLabel }) => {
+        openQuoteModal({ text, locationLabel });
+      },
+    };
+
+    try {
+      let ctrl = null;
+      if (file.category === 'docx') {
+        ctrl = await renderDocxPreview(ctx);
+      } else if (file.category === 'xlsx') {
+        ctrl = await renderXlsxPreview(ctx);
+      } else if (file.category === 'pptx') {
+        ctrl = await renderPptxPreview(ctx);
+      } else if (file.category === 'pdf') {
+        ctrl = await renderPdfPreview(ctx);
+      } else {
+        ctrl = await renderTextOrImagePreview(ctx);
+      }
+
+      if (openSeq !== state.previewOpenSeq) {
+        try {
+          ctrl?.destroy?.();
+        } catch {}
+        runCleanups();
+        return;
+      }
+      state.activeController = ctrl;
+    } catch (err) {
+      runCleanups();
+      if (openSeq !== state.previewOpenSeq) return;
+      const warnIcon = WSIcons?.render ? WSIcons.render('ui-warn', { size: 36 }) : '';
+      stage.innerHTML = `<div class="ws-empty-welcome">
+        <div class="ws-empty-hero" style="color:var(--ws-warn);">${warnIcon}</div>
+        <h3>文档预览失败</h3>
+        <p>${String(err?.message || err).replace(/</g, '&lt;')}</p>
+      </div>`;
+    }
+  }
+
+  $('previewRefreshBtn').addEventListener('click', () => {
+    if (state.activeFile) openFilePreview(state.activeFile, { preserveState: true });
+  });
+  $('previewOpenNativeBtn').addEventListener('click', () => openInNativeTab(state.activeFile));
+  $('previewSendPathBtn').addEventListener('click', () => {
+    if (state.activeFile) sendFilePathToAgent(state.activeFile);
+  });
+
+  // ---------- Quote Selection & Composer ----------
+  const quoteFab = $('quoteFab');
+  let selectedQuoteText = '';
+
+  function checkPreviewSelection() {
+    const ae = document.activeElement;
+    if (ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT' || ae.isContentEditable)) {
+      quoteFab.classList.add('is-hidden');
+      return;
+    }
+    const stage = $('previewStage');
+    const sel = global.getSelection();
+    if (!sel || sel.isCollapsed || !state.activeFile) {
+      quoteFab.classList.add('is-hidden');
+      return;
+    }
+    const text = sel.toString().trim();
+    if (!text || !stage.contains(sel.anchorNode)) {
+      quoteFab.classList.add('is-hidden');
+      return;
+    }
+    selectedQuoteText = text.slice(0, 3000);
+    try {
+      const rect = sel.getRangeAt(0).getBoundingClientRect();
+      const x = Math.min(Math.max(rect.left + rect.width / 2 - 55, 10), global.innerWidth - 130);
+      const y = Math.max(rect.top - 36, 46);
+      quoteFab.style.left = `${x}px`;
+      quoteFab.style.top = `${y}px`;
+      quoteFab.classList.remove('is-hidden');
+    } catch {
+      quoteFab.classList.add('is-hidden');
+    }
+  }
+
+  document.addEventListener('mouseup', () => setTimeout(checkPreviewSelection, 10));
+  document.addEventListener('keyup', () => setTimeout(checkPreviewSelection, 10));
+
+  function openQuoteModal({ text, locationLabel = '' }) {
+    if (!state.activeFile || !text) return;
+    quoteFab.classList.add('is-hidden');
+    state.pendingQuote = { file: state.activeFile, text, locationLabel };
+    const loc = locationLabel ? ` (${locationLabel})` : '';
+    $('quoteSourceMeta').textContent = `来源：${state.activeFile.relPath || state.activeFile.name}${loc}`;
+    $('quoteExcerptBox').textContent = text;
+    $('quoteCommentInput').value = '';
+    $('quoteModal').classList.remove('is-hidden');
+    $('quoteCommentInput').focus();
+  }
+
+  $('quoteFabBtn').addEventListener('click', () => {
+    if (selectedQuoteText) openQuoteModal({ text: selectedQuoteText });
+  });
+
+  $('quoteModalClose').addEventListener('click', () => $('quoteModal').classList.add('is-hidden'));
+  $('quoteModal').addEventListener('click', (e) => {
+    if (e.target === $('quoteModal')) $('quoteModal').classList.add('is-hidden');
+  });
+
+  $('quoteSendBtn').addEventListener('click', async () => {
+    const q = state.pendingQuote;
+    if (!q) return;
+    const comment = $('quoteCommentInput').value.trim();
+    const loc = q.locationLabel ? ` [${q.locationLabel}]` : '';
+    const pathLabel = q.file.relPath || q.file.path;
+    const quotedBlock = q.text
+      .split('\n')
+      .map((l) => `> ${l}`)
+      .join('\n');
+    const message = `引用文档 \`${pathLabel}\`${loc}：\n${quotedBlock}${
+      comment ? `\n\n修改/处理意见：${comment}` : '\n\n请针对以上内容提供分析或修改建议。'
+    }`;
+
+    $('quoteModal').classList.add('is-hidden');
+    await sendToAgent(message);
+  });
+
+  $('quoteCommentBtn').addEventListener('click', () => {
+    const q = state.pendingQuote;
+    if (!q) return;
+    const comment = $('quoteCommentInput').value.trim() || '请参考此引用片段';
+    if (global.sidecar?.ui?.addArtifactComment) {
+      global.sidecar.ui.addArtifactComment({
+        uri: q.file.uri,
+        comment,
+        selection: q.text,
+        pageTitle: q.file.name,
+      });
+      $('quoteModal').classList.add('is-hidden');
+      showToast('已暂存为文档批注，将随你下一条消息发送');
+    } else {
+      showToast('当前环境不支持文档批注暂存');
+    }
+  });
+
+  // ---------- Open Documents Tab Strip & Polling ----------
+  function getVisibleTabDocs() {
+    const filteredProduced = state.producedOnlyDocs
+      ? state.producedDocs.filter((d) => d.isDoc)
+      : state.producedDocs;
+    const producedByKey = new Map();
+    for (const d of filteredProduced) {
+      producedByKey.set(pathKey(d.path), d);
+    }
+
+    const merged = [];
+    const seenKeys = new Set();
+
+    for (const tab of state.openTabs) {
+      const k = pathKey(tab.path);
+      if (seenKeys.has(k) || isPathDismissed(tab)) continue;
+      const latestProduced = producedByKey.get(k);
+      const item = latestProduced
+        ? {
+            ...latestProduced,
+            ...tab,
+            mtimeMs: Math.max(tab.mtimeMs || 0, latestProduced.mtimeMs || 0),
+            size: latestProduced.size ?? tab.size,
+          }
+        : tab;
+      seenKeys.add(k);
+      merged.push(item);
+    }
+
+    for (const doc of filteredProduced) {
+      const k = pathKey(doc.path);
+      if (seenKeys.has(k) || isPathDismissed(doc)) continue;
+      seenKeys.add(k);
+      merged.push(doc);
+    }
+
+    return merged;
+  }
+
+  function closePreviewToEmpty() {
+    ++state.previewOpenSeq;
+    if (state.activeController?.destroy) {
+      try {
+        state.activeController.destroy();
+      } catch {}
+      state.activeController = null;
+    }
+    if (state.activeCleanup) {
+      try {
+        state.activeCleanup();
+      } catch {}
+      state.activeCleanup = null;
+    }
+    state.activeFile = null;
+    state.activeFileSig = '';
+    state.hasUserClosedAll = true;
+
+    $('previewHeader').classList.add('is-hidden');
+    $('previewEngineBadge').classList.add('is-hidden');
+    $('previewEngineBadge').textContent = '';
+    $('previewSubtoolbar').classList.add('is-hidden');
+    $('previewSubtoolbar').innerHTML = '';
+
+    for (const row of document.querySelectorAll('.ws-tree-row')) {
+      row.classList.remove('is-active');
+    }
+
+    const stage = $('previewStage');
+    stage.innerHTML = `
+      <div id="previewEmptyState" class="ws-empty-welcome">
+        <div class="ws-empty-hero" data-ws-icon="hero-workspace" data-size="52"></div>
+        <h3>Sidecar Studio 三合一工作台</h3>
+        <p>从左侧文件树或上方文档标签栏点击任意文件即可实时高保真预览：<br>Word (<code>.docx</code>) · Excel (<code>.xlsx/.xls/.csv</code>) · PPT (<code>.pptx</code>) · PDF · Markdown · 图片 · 代码</p>
+        <div id="welcomeRecentDocs" class="ws-welcome-recents"></div>
+      </div>
+    `;
+    if (global.WSIcons?.hydrate) {
+      global.WSIcons.hydrate($('previewEmptyState'));
+    }
+    const rootItems = state.activeRoot ? state.dirCache.get(state.activeRoot) || [] : [];
+    renderWelcomeRecents(rootItems);
+  }
+
+  async function closeTab(doc) {
+    if (!doc?.path) return;
+    const key = pathKey(doc.path);
+    const visibleBefore = getVisibleTabDocs();
+    const closedIdx = visibleBefore.findIndex((d) => pathKey(d.path) === key);
+    const wasActive = pathKey(state.activeFile?.path) === key;
+
+    if (wasActive && state.activeController?.isDirty?.()) {
+      const ok = await confirmDiscardIfDirty();
+      if (!ok) return;
+    }
+
+    state.dismissedPaths.set(key, Math.floor(doc.mtimeMs || Date.now()));
+    state.openTabs = state.openTabs.filter((t) => pathKey(t.path) !== key);
+
+    const remaining = getVisibleTabDocs();
+    if (wasActive) {
+      if (remaining.length > 0) {
+        const nextIdx = Math.min(closedIdx >= 0 ? closedIdx : 0, remaining.length - 1);
+        const nextDoc = remaining[nextIdx];
+        state.seenProducedPaths.add(nextDoc.path);
+        openFilePreview(nextDoc, { skipDirtyCheck: true });
+        return;
+      }
+      closePreviewToEmpty();
+    }
+    renderProducedStrip();
+  }
+
+  function renderProducedStrip() {
+    const listEl = $('producedList');
+    const docs = getVisibleTabDocs();
+
+    listEl.innerHTML = '';
+    if (!docs.length) {
+      const hasHiddenNonDocProduced =
+        state.producedOnlyDocs &&
+        state.producedDocs.some((d) => !d.isDoc && !isPathDismissed(d));
+      listEl.innerHTML = `<span class="ws-produced-empty">${
+        hasHiddenNonDocProduced ? '当前无文档标签（可点右侧查看全部文件）' : '暂无打开的文档'
+      }</span>`;
+      return;
+    }
+
+    const activeKey = pathKey(state.activeFile?.path);
+    const closeSvg = WSIcons?.render ? WSIcons.render('ui-close', { size: 11 }) : '&times;';
+
+    for (const doc of docs) {
+      const docKey = pathKey(doc.path);
+      const isActive = Boolean(activeKey) && activeKey === docKey;
+      const isUnseen = !state.seenProducedPaths.has(doc.path) && !isActive;
+
+      const tab = document.createElement('div');
+      tab.setAttribute('role', 'tab');
+      tab.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      tab.tabIndex = 0;
+      tab.className = `ws-doc-pill ${isActive ? 'is-active' : ''} ${isUnseen ? 'is-new' : ''}`;
+      tab.title = `${doc.relPath || doc.path} (${doc.sourceTool || '打开的文档'})`;
+
+      const ic = document.createElement('span');
+      ic.className = 'ws-pill-icon';
+      ic.innerHTML = getFileIcon(doc, { size: 15 });
+
+      const lbl = document.createElement('span');
+      lbl.className = 'ws-doc-pill-name';
+      lbl.textContent = doc.name;
+
+      const closeBtn = document.createElement('button');
+      closeBtn.type = 'button';
+      closeBtn.className = 'ws-tab-close';
+      closeBtn.title = `关闭 ${doc.name}`;
+      closeBtn.setAttribute('aria-label', `关闭 ${doc.name}`);
+      closeBtn.innerHTML = closeSvg;
+      closeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        closeTab(doc);
+      });
+
+      const activate = () => {
+        state.seenProducedPaths.add(doc.path);
+        switchMode('workbench');
+        openFilePreview(doc);
+      };
+      tab.addEventListener('click', activate);
+      tab.addEventListener('keydown', (e) => {
+        if (e.target.closest('.ws-tab-close')) return;
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          activate();
+        }
+      });
+
+      tab.append(ic, lbl, closeBtn);
+      listEl.appendChild(tab);
+    }
+  }
+
+  $('producedFilterBtn').addEventListener('click', () => {
+    state.producedOnlyDocs = !state.producedOnlyDocs;
+    $('producedFilterBtn').textContent = state.producedOnlyDocs ? '仅看文档' : '全部文件';
+    $('producedFilterBtn').classList.toggle('is-active', !state.producedOnlyDocs);
+    renderProducedStrip();
+  });
+
+  async function pollProducedDocs() {
+    try {
+      const data = await getJson(
+        `/api/doc/produced?conversationId=${encodeURIComponent(state.conversationId || '')}`
+      );
+      if (!data?.success) return;
+      if (!state.conversationId && data.conversationId) {
+        state.conversationId = data.conversationId;
+      }
+      const nextDocs = data.docs || [];
+      const wasEmpty = state.producedDocs.length === 0;
+      state.producedDocs = nextDocs;
+
+      for (const doc of nextDocs) {
+        const key = pathKey(doc.path);
+        const dismissedMtime = state.dismissedPaths.get(key);
+        if (dismissedMtime !== undefined && Math.floor(doc.mtimeMs || 0) > dismissedMtime) {
+          state.dismissedPaths.delete(key);
+        }
+      }
+
+      const activeProduced = nextDocs.filter((d) => !isPathDismissed(d));
+      const qs = new URLSearchParams(location.search);
+      const hasInitialFile = Boolean(qs.get('file') || qs.get('uri') || qs.get('path'));
+      if (!state.activeFile && !state.hasUserClosedAll && !hasInitialFile && activeProduced.length > 0) {
+        const target = state.producedOnlyDocs
+          ? activeProduced.find((d) => d.isDoc)
+          : activeProduced.find((d) => d.isDoc) || activeProduced[0];
+        if (target) {
+          state.seenProducedPaths.add(target.path);
+          await openFilePreview(target);
+          return;
+        }
+      }
+
+      if (wasEmpty && nextDocs.length > 0 && state.activeFile) {
+        state.seenProducedPaths.add(state.activeFile.path);
+      }
+      renderProducedStrip();
+    } catch {}
+  }
+
+  async function pollActiveFileStat() {
+    if (state.statPollInFlight || !state.activeFile?.path) return;
+    const targetPath = state.activeFile.path;
+    const targetSeq = state.previewOpenSeq;
+    state.statPollInFlight = true;
+    try {
+      const data = await getJson(
+        `/api/file/stat?path=${encodeURIComponent(targetPath)}&conversationId=${encodeURIComponent(
+          state.conversationId || ''
+        )}`
+      );
+      if (
+        state.previewOpenSeq !== targetSeq ||
+        !state.activeFile ||
+        pathKey(state.activeFile.path) !== pathKey(targetPath)
+      ) {
+        return;
+      }
+      if (!data?.success || !data.exists) return;
+      const nextSig =
+        data.version || `${Math.floor(data.mtimeMs || 0)}:${data.size || 0}`;
+      if (nextSig !== state.activeFileSig) {
+        if (state.activeController?.isDirty?.()) {
+          state.activeFileSig = nextSig;
+          state.activeFile = {
+            ...state.activeFile,
+            mtimeMs: data.mtimeMs,
+            size: data.size,
+            version: data.version || state.activeFile.version || '',
+          };
+          showToast('检测到文件在外部有更新（当前有未保存修改，可手动保存或刷新）', 3200);
+          return;
+        }
+        state.activeFile = {
+          ...state.activeFile,
+          mtimeMs: data.mtimeMs,
+          size: data.size,
+          version: data.version || '',
+        };
+        await openFilePreview(state.activeFile, { preserveState: true, skipDirtyCheck: true });
+        showToast(`已自动刷新：${state.activeFile.name}`);
+      }
+    } catch {} finally {
+      state.statPollInFlight = false;
+    }
+  }
+
+  async function pollWatchState() {
+    if (!state.activeRoot) return;
+    try {
+      const data = await getJson(
+        `/api/workspace/watch-state?root=${encodeURIComponent(state.activeRoot)}`
+      );
+      if (data?.success && Number.isFinite(data.rev)) {
+        if (state.watchRev && data.rev !== state.watchRev) {
+          await reloadExpandedDirs();
+        }
+        state.watchRev = data.rev;
+      }
+    } catch {}
+  }
+
+  // ---------- Workspace Synchronization ----------
+  async function applyWorkspaceUris(uris) {
+    const norm = Array.isArray(uris) ? uris : [];
+    const nextKey = JSON.stringify(norm);
+    if (nextKey === state.lastRegisteredUrisKey) return;
+    state.lastRegisteredUrisKey = nextKey;
+    const regSeq = ++state.workspaceRegSeq;
+
+    try {
+      const res = await postJson('/api/workspace/register', {
+        workspaceUris: norm,
+        generation: state.workspaceGen,
+      });
+      if (Number.isFinite(res?.generation)) {
+        state.workspaceGen = Math.max(state.workspaceGen, res.generation);
+      }
+      if (regSeq !== state.workspaceRegSeq || res?.applied === false) return;
+
+      state.roots = res.roots || [];
+
+      const sel = $('rootSelector');
+      sel.innerHTML = '';
+      for (const r of state.roots) {
+        const opt = document.createElement('option');
+        opt.value = r.path;
+        opt.textContent = r.name;
+        sel.appendChild(opt);
+      }
+      sel.classList.toggle('is-hidden', state.roots.length <= 1);
+
+      if (!state.roots.some((r) => r.path === state.activeRoot)) {
+        state.activeRoot = state.roots[0]?.path || '';
+        state.expandedDirs.clear();
+        state.dirCache.clear();
+        state.watchRev = 0;
+      }
+      if (state.activeRoot) sel.value = state.activeRoot;
+
+      await reloadExpandedDirs();
+      await pollProducedDocs();
+    } catch (err) {
+      if (regSeq === state.workspaceRegSeq) {
+        state.lastRegisteredUrisKey = null;
+      }
+      console.warn('Workspace sync failed:', err);
+    }
+  }
+
+  $('rootSelector').addEventListener('change', async (e) => {
+    state.activeRoot = e.target.value;
+    state.expandedDirs.clear();
+    state.dirCache.clear();
+    state.watchRev = 0;
+    await reloadExpandedDirs();
+  });
+
+  $('globalRefreshBtn').addEventListener('click', async () => {
+    await reloadExpandedDirs();
+    await pollProducedDocs();
+    if (state.activeFile) await openFilePreview(state.activeFile, { preserveState: true });
+    if (state.mode === 'trajectory') await trajectoryCtrl.refresh({ force: true });
+    showToast('已刷新工作台');
+  });
+
+  // ---------- Bootstrap ----------
+  (async function bootstrap() {
+    try {
+      const health = await getJson('/api/health');
+      state.capabilities = health.converters || {};
+      if (Number.isFinite(health?.generation)) {
+        state.workspaceGen = Math.max(state.workspaceGen, health.generation);
+      }
+    } catch {}
+
+    const params = new URLSearchParams(location.search);
+    const initialFileParam = params.get('file') || params.get('uri') || params.get('path') || '';
+
+    if (global.sidecar?.getWorkspaceUris) {
+      global.sidecar.onWorkspaceChange((uris) => {
+        applyWorkspaceUris(uris);
+      });
+      const initialUris = await global.sidecar.getWorkspaceUris();
+      if (initialUris?.length) {
+        await applyWorkspaceUris(initialUris);
+      } else {
+        await pollProducedDocs();
+      }
+    } else {
+      await pollProducedDocs();
+    }
+
+    if (initialFileParam) {
+      const clean = initialFileParam.replace(/^file:\/\//i, '');
+      const name = clean.split(/[\\/]/).pop() || clean;
+      const extMatch = /\.[^.]+$/.exec(name);
+      const ext = extMatch ? extMatch[0].toLowerCase() : '';
+      const catMap = {
+        '.docx': 'docx',
+        '.xlsx': 'xlsx',
+        '.xls': 'xlsx',
+        '.csv': 'xlsx',
+        '.pptx': 'pptx',
+        '.pdf': 'pdf',
+        '.md': 'markdown',
+      };
+      await openFilePreview({
+        name,
+        path: initialFileParam,
+        relPath: name,
+        ext,
+        category: catMap[ext] || 'code',
+        uri: initialFileParam.startsWith('file://') ? initialFileParam : '',
+      });
+    }
+
+    state.pollTimers.push(
+      setInterval(pollActiveFileStat, 2000),
+      setInterval(pollWatchState, 2500),
+      setInterval(pollProducedDocs, 3500)
+    );
+
+    global.addEventListener('pagehide', () => {
+      for (const id of state.pollTimers) clearInterval(id);
+      state.pollTimers = [];
+      try {
+        state.activeController?.destroy?.();
+      } catch {}
+      try {
+        state.activeCleanup?.();
+      } catch {}
+      try {
+        trajectoryCtrl?.destroy?.();
+      } catch {}
+    });
+  })();
+})(window);

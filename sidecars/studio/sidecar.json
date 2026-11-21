@@ -1,0 +1,28 @@
+{
+  "command": "node",
+  "args": [
+    "--max-old-space-size=384",
+    "server.mjs"
+  ],
+  "restart_policy": "always",
+  "display_name": "Sidecar Studio",
+  "description": "工作区文件树、Word/Excel/PPT/PDF 实时高保真预览与对话轨迹三合一侧边工作台",
+  "has_web_ui": true,
+  "ui_config": {
+    "display_name": "Sidecar Studio",
+    "views": [
+      {
+        "title": "Sidecar Studio",
+        "path": "/",
+        "entrypoint": "SIDECAR_UI_ENTRYPOINT_AUX_PANE",
+        "file_extensions": [
+          ".docx",
+          ".xlsx",
+          ".xls",
+          ".pptx",
+          ".pdf"
+        ]
+      }
+    ]
+  }
+}
