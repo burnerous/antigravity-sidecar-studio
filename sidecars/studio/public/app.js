@@ -49,6 +49,8 @@
       global.sidecar?.conversationId || new URLSearchParams(location.search).get('conversationId') || '',
     pendingQuote: null,
     contextTarget: null,
+    tabContextTarget: null,
+    openTabsFilterQuery: '',
   };
 
   let toastTimer = null;
@@ -219,8 +221,9 @@
 
   function makeTreeRow(item, depth, isSearchResult = false) {
     const row = document.createElement('div');
+    const activeKey = pathKey(state.activeFile?.path);
     row.className = `ws-tree-row ${item.ignored ? 'is-ignored' : ''} ${
-      state.activeFile?.path === item.path ? 'is-active' : ''
+      Boolean(activeKey) && activeKey === pathKey(item.path) ? 'is-active' : ''
     }`;
     row.dataset.path = item.path;
     row.style.paddingLeft = `${8 + depth * 14}px`;
@@ -430,6 +433,8 @@
   // ---------- Context Menu & File Actions ----------
   function showContextMenu(x, y, item) {
     state.contextTarget = item;
+    $('tabContextMenu')?.classList.add('is-hidden');
+    closeOpenTabsPopover();
     const menu = $('treeContextMenu');
     menu.classList.remove('is-hidden');
     const maxX = global.innerWidth - 205;
@@ -438,7 +443,13 @@
     menu.style.top = `${Math.max(6, Math.min(y, maxY))}px`;
   }
 
-  document.addEventListener('click', () => $('treeContextMenu').classList.add('is-hidden'));
+  document.addEventListener('click', (e) => {
+    $('treeContextMenu').classList.add('is-hidden');
+    $('tabContextMenu')?.classList.add('is-hidden');
+    if (!e.target.closest('#openTabsPopover, #openTabsPickerBtn')) {
+      closeOpenTabsPopover();
+    }
+  });
 
   $('treeContextMenu').addEventListener('click', async (e) => {
     const btn = e.target.closest('button[data-action]');
@@ -625,10 +636,14 @@
     const stage = $('previewStage');
     stage.innerHTML = '<div class="ws-empty-welcome"><p>正在加载预览...</p></div>';
 
+    const activeTreeKey = pathKey(file.path);
     for (const row of document.querySelectorAll('.ws-tree-row')) {
-      row.classList.toggle('is-active', row.dataset.path === file.path);
+      row.classList.toggle('is-active', Boolean(activeTreeKey) && pathKey(row.dataset.path) === activeTreeKey);
     }
     renderProducedStrip();
+    // 切换文件后自动把当前激活标签滚动到可视区，避免标签过多时看不到当前项
+    const activePill = $('producedList')?.querySelector('.ws-doc-pill.is-active');
+    activePill?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
 
     const saveFile = async ({
       content,
@@ -792,10 +807,127 @@
   $('previewRefreshBtn').addEventListener('click', () => {
     if (state.activeFile) openFilePreview(state.activeFile, { preserveState: true });
   });
+  $('previewLocateTreeBtn')?.addEventListener('click', () => {
+    if (state.activeFile) revealFileInTree(state.activeFile);
+  });
   $('previewOpenNativeBtn').addEventListener('click', () => openInNativeTab(state.activeFile));
   $('previewSendPathBtn').addEventListener('click', () => {
     if (state.activeFile) sendFilePathToAgent(state.activeFile);
   });
+
+  // ---------- 在工作区文件树中展开并高亮定位目标文件 ----------
+  function stripTrailingSlashes(p) {
+    return String(p || '').replace(/[\\/]+$/, '');
+  }
+
+  function findContainingRoot(filePath) {
+    const fk = stripTrailingSlashes(pathKey(filePath));
+    if (!fk) return null;
+    let best = null;
+    for (const r of state.roots) {
+      const rk = stripTrailingSlashes(pathKey(r.path));
+      if (!rk) continue;
+      if (fk === rk || fk.startsWith(`${rk}/`)) {
+        if (!best || rk.length > stripTrailingSlashes(pathKey(best.path)).length) {
+          best = r;
+        }
+      }
+    }
+    return best;
+  }
+
+  async function revealFileInTree(file) {
+    const targetKey = pathKey(file?.path);
+    if (!targetKey) return;
+
+    switchMode('workbench');
+    setTreeCollapsed(false);
+
+    const matchedRoot = findContainingRoot(file.path);
+    if (!matchedRoot) {
+      showToast('该文件不在当前工作区目录树中');
+      return;
+    }
+
+    if (pathKey(matchedRoot.path) !== pathKey(state.activeRoot)) {
+      state.activeRoot = matchedRoot.path;
+      const sel = $('rootSelector');
+      if (sel) sel.value = matchedRoot.path;
+      state.expandedDirs.clear();
+      state.dirCache.clear();
+      state.watchRev = 0;
+    }
+
+    if (state.searchQuery) {
+      $('treeSearchInput').value = '';
+      state.searchQuery = '';
+      $('treeSearchClearBtn')?.classList.add('is-hidden');
+    }
+
+    const rootSlash = stripTrailingSlashes(matchedRoot.path).replace(/\\/g, '/');
+    const fileSlash = String(file.path || '').replace(/\\/g, '/');
+    const relPart = fileSlash.slice(rootSlash.length).replace(/^\/+/, '');
+    const segments = relPart.split('/').filter(Boolean);
+    if (!segments.length) return;
+
+    const dirSegments = segments.slice(0, -1);
+    const targetFileName = segments[segments.length - 1];
+    const isWinPath = /^[a-zA-Z]:[\\/]|^\\\\/.test(matchedRoot.path);
+    const segKey = (s) => (isWinPath ? String(s || '').toLowerCase() : String(s || ''));
+
+    // 逐级展开目标文件所在的所有父目录；遇到被忽略目录隐藏时自动放开一次重试
+    let retriedWithIgnored = false;
+    while (true) {
+      let currentDir = state.activeRoot;
+      if (!state.dirCache.has(currentDir)) {
+        await fetchDir(currentDir);
+      }
+      let missingPotentiallyIgnored = false;
+      for (const seg of dirSegments) {
+        const children = state.dirCache.get(currentDir) || [];
+        const dirItem = children.find((it) => it.isDir && segKey(it.name) === segKey(seg));
+        if (!dirItem) {
+          missingPotentiallyIgnored = true;
+          break;
+        }
+        state.expandedDirs.add(dirItem.path);
+        currentDir = dirItem.path;
+        if (!state.dirCache.has(currentDir)) {
+          await fetchDir(currentDir);
+        }
+      }
+      if (!missingPotentiallyIgnored) {
+        const finalItems = state.dirCache.get(currentDir) || [];
+        const fileFound = finalItems.some(
+          (it) => pathKey(it.path) === targetKey || (!it.isDir && segKey(it.name) === segKey(targetFileName))
+        );
+        if (!fileFound) missingPotentiallyIgnored = true;
+      }
+      if (missingPotentiallyIgnored && !state.showIgnored && !retriedWithIgnored) {
+        retriedWithIgnored = true;
+        state.showIgnored = true;
+        $('toggleIgnoredBtn')?.classList.add('is-active');
+        state.dirCache.clear();
+        continue;
+      }
+      break;
+    }
+
+    await renderTree();
+    const targetRow = Array.from($('treeContainer').querySelectorAll('.ws-tree-row')).find(
+      (r) => pathKey(r.dataset.path) === targetKey
+    );
+    if (!targetRow) {
+      showToast('未在工作区目录树中找到该文件');
+      return;
+    }
+    targetRow.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    targetRow.classList.remove('is-located-flash');
+    void targetRow.offsetWidth;
+    targetRow.classList.add('is-located-flash');
+    setTimeout(() => targetRow.classList.remove('is-located-flash'), 1600);
+    showToast(`已在文件树中定位：${file.name}`, 1800);
+  }
 
   // ---------- Quote Selection & Composer ----------
   const quoteFab = $('quoteFab');
@@ -953,6 +1085,7 @@
     $('previewEngineBadge').textContent = '';
     $('previewSubtoolbar').classList.add('is-hidden');
     $('previewSubtoolbar').innerHTML = '';
+    $('quoteFab')?.classList.add('is-hidden');
 
     for (const row of document.querySelectorAll('.ws-tree-row')) {
       row.classList.remove('is-active');
@@ -974,6 +1107,18 @@
     renderWelcomeRecents(rootItems);
   }
 
+  function getDismissMtime(doc) {
+    const key = pathKey(doc?.path);
+    const matchingProduced = key
+      ? state.producedDocs.find((p) => pathKey(p.path) === key)
+      : null;
+    const mtime = Math.max(
+      Math.floor(doc?.mtimeMs || 0),
+      Math.floor(matchingProduced?.mtimeMs || 0)
+    );
+    return mtime > 0 ? mtime : Math.floor(Date.now());
+  }
+
   async function closeTab(doc) {
     if (!doc?.path) return;
     const key = pathKey(doc.path);
@@ -986,7 +1131,7 @@
       if (!ok) return;
     }
 
-    state.dismissedPaths.set(key, Math.floor(doc.mtimeMs || Date.now()));
+    state.dismissedPaths.set(key, getDismissMtime(doc));
     state.openTabs = state.openTabs.filter((t) => pathKey(t.path) !== key);
 
     const remaining = getVisibleTabDocs();
@@ -1003,9 +1148,331 @@
     renderProducedStrip();
   }
 
+  let closeAllInFlight = false;
+  async function closeAllTabs() {
+    if (closeAllInFlight) return;
+    const initialDocs = getVisibleTabDocs();
+    if (!initialDocs.length && !state.activeFile) return;
+
+    closeAllInFlight = true;
+    try {
+      if (state.activeController?.isDirty?.()) {
+        const ok = await confirmDiscardIfDirty();
+        if (!ok) return;
+      }
+
+      const docsToClose = getVisibleTabDocs();
+      const closedKeys = new Set();
+      for (const doc of docsToClose) {
+        const key = pathKey(doc?.path);
+        if (!key) continue;
+        state.dismissedPaths.set(key, getDismissMtime(doc));
+        closedKeys.add(key);
+      }
+      if (state.activeFile?.path) {
+        const activeKey = pathKey(state.activeFile.path);
+        if (activeKey) {
+          state.dismissedPaths.set(activeKey, getDismissMtime(state.activeFile));
+          closedKeys.add(activeKey);
+        }
+      }
+
+      state.openTabs = [];
+
+      if (state.activeFile) {
+        closePreviewToEmpty();
+      } else {
+        state.hasUserClosedAll = true;
+      }
+
+      renderProducedStrip();
+      if (closedKeys.size > 0) {
+        showToast(`已关闭 ${closedKeys.size} 个标签页`, 1800);
+      }
+    } finally {
+      closeAllInFlight = false;
+    }
+  }
+
+  // 批量关闭除指定标签之外的所有已打开标签
+  async function closeOtherTabs(keepDoc) {
+    if (closeAllInFlight || !keepDoc?.path) return;
+    const keepKey = pathKey(keepDoc.path);
+    const docsBefore = getVisibleTabDocs();
+    const othersBefore = docsBefore.filter((d) => pathKey(d.path) !== keepKey);
+    if (!othersBefore.length) return;
+
+    const activeKey = pathKey(state.activeFile?.path);
+    const activeWillClose = Boolean(activeKey) && activeKey !== keepKey;
+
+    closeAllInFlight = true;
+    try {
+      if (activeWillClose && state.activeController?.isDirty?.()) {
+        const ok = await confirmDiscardIfDirty();
+        if (!ok) return;
+      }
+
+      const docsNow = getVisibleTabDocs();
+      const toClose = docsNow.filter((d) => pathKey(d.path) !== keepKey);
+      const closedKeys = new Set();
+      for (const d of toClose) {
+        const k = pathKey(d?.path);
+        if (!k) continue;
+        state.dismissedPaths.set(k, getDismissMtime(d));
+        closedKeys.add(k);
+      }
+
+      state.dismissedPaths.delete(keepKey);
+      state.openTabs = state.openTabs.filter((t) => pathKey(t.path) === keepKey);
+
+      renderProducedStrip();
+      if (activeWillClose || !state.activeFile) {
+        state.seenProducedPaths.add(keepDoc.path);
+        await openFilePreview(keepDoc, { skipDirtyCheck: true });
+      }
+      if (closedKeys.size > 0) {
+        showToast(`已关闭其他 ${closedKeys.size} 个标签页`, 1800);
+      }
+    } finally {
+      closeAllInFlight = false;
+    }
+  }
+
+  // 批量关闭指定标签右侧的所有标签
+  async function closeRightTabs(anchorDoc) {
+    if (closeAllInFlight || !anchorDoc?.path) return;
+    const anchorKey = pathKey(anchorDoc.path);
+    const docsBefore = getVisibleTabDocs();
+    const anchorIdx = docsBefore.findIndex((d) => pathKey(d.path) === anchorKey);
+    if (anchorIdx < 0 || anchorIdx >= docsBefore.length - 1) return;
+
+    const rightKeysBefore = new Set(docsBefore.slice(anchorIdx + 1).map((d) => pathKey(d.path)));
+    const activeKey = pathKey(state.activeFile?.path);
+    const activeWillClose = Boolean(activeKey) && rightKeysBefore.has(activeKey);
+
+    closeAllInFlight = true;
+    try {
+      if (activeWillClose && state.activeController?.isDirty?.()) {
+        const ok = await confirmDiscardIfDirty();
+        if (!ok) return;
+      }
+
+      const docsNow = getVisibleTabDocs();
+      const anchorIdxNow = docsNow.findIndex((d) => pathKey(d.path) === anchorKey);
+      if (anchorIdxNow < 0 || anchorIdxNow >= docsNow.length - 1) return;
+
+      const toClose = docsNow.slice(anchorIdxNow + 1);
+      const closedKeys = new Set();
+      for (const d of toClose) {
+        const k = pathKey(d?.path);
+        if (!k) continue;
+        state.dismissedPaths.set(k, getDismissMtime(d));
+        closedKeys.add(k);
+      }
+
+      state.openTabs = state.openTabs.filter((t) => !closedKeys.has(pathKey(t.path)));
+
+      renderProducedStrip();
+      if (activeWillClose) {
+        state.seenProducedPaths.add(anchorDoc.path);
+        await openFilePreview(anchorDoc, { skipDirtyCheck: true });
+      }
+      if (closedKeys.size > 0) {
+        showToast(`已关闭右侧 ${closedKeys.size} 个标签页`, 1800);
+      }
+    } finally {
+      closeAllInFlight = false;
+    }
+  }
+
+  // ---------- 已打开标签页速查下拉面板 & 标签右键菜单 ----------
+  function isOpenTabsPopoverOpen() {
+    const pop = $('openTabsPopover');
+    return Boolean(pop && !pop.classList.contains('is-hidden'));
+  }
+
+  function closeOpenTabsPopover() {
+    const pop = $('openTabsPopover');
+    const btn = $('openTabsPickerBtn');
+    if (pop && !pop.classList.contains('is-hidden')) {
+      pop.classList.add('is-hidden');
+    }
+    if (btn) btn.setAttribute('aria-expanded', 'false');
+  }
+
+  function renderOpenTabsPopoverList() {
+    const listEl = $('openTabsPopoverList');
+    if (!listEl) return;
+    const docs = getVisibleTabDocs();
+    const q = String(state.openTabsFilterQuery || '').trim().toLowerCase();
+    const filtered = q
+      ? docs.filter((d) => {
+          const hay = `${d.name || ''} ${d.relPath || ''} ${d.path || ''}`.toLowerCase();
+          return hay.includes(q);
+        })
+      : docs;
+
+    listEl.innerHTML = '';
+    if (!filtered.length) {
+      listEl.innerHTML = `<div class="ws-tabs-popover-empty">${
+        docs.length ? '没有匹配筛选条件的已打开标签' : '暂无已打开的标签'
+      }</div>`;
+      return;
+    }
+
+    const activeKey = pathKey(state.activeFile?.path);
+    const closeSvg = WSIcons?.render ? WSIcons.render('ui-close', { size: 11 }) : '&times;';
+
+    for (const doc of filtered) {
+      const isActive = Boolean(activeKey) && activeKey === pathKey(doc.path);
+      const row = document.createElement('div');
+      row.className = `ws-tabs-popover-item ${isActive ? 'is-active' : ''}`;
+      row.setAttribute('role', 'option');
+      row.setAttribute('aria-selected', isActive ? 'true' : 'false');
+      row.tabIndex = 0;
+      row.title = doc.path || doc.relPath || doc.name;
+
+      const ic = document.createElement('span');
+      ic.className = 'ws-pill-icon';
+      ic.innerHTML = getFileIcon(doc, { size: 16 });
+
+      const meta = document.createElement('div');
+      meta.className = 'ws-tabs-popover-meta';
+      const nameEl = document.createElement('span');
+      nameEl.className = 'ws-tabs-popover-name';
+      nameEl.textContent = doc.name;
+      const pathEl = document.createElement('span');
+      pathEl.className = 'ws-tabs-popover-path';
+      pathEl.textContent = doc.relPath || doc.path || '';
+      meta.append(nameEl, pathEl);
+
+      const closeBtn = document.createElement('button');
+      closeBtn.type = 'button';
+      closeBtn.className = 'ws-tabs-popover-close';
+      closeBtn.title = `关闭 ${doc.name}`;
+      closeBtn.setAttribute('aria-label', `关闭 ${doc.name}`);
+      closeBtn.innerHTML = closeSvg;
+      closeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        closeTab(doc);
+      });
+
+      const openDoc = () => {
+        state.seenProducedPaths.add(doc.path);
+        closeOpenTabsPopover();
+        switchMode('workbench');
+        openFilePreview(doc);
+      };
+      row.addEventListener('click', openDoc);
+      row.addEventListener('keydown', (e) => {
+        if (e.target.closest('.ws-tabs-popover-close')) return;
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          openDoc();
+        }
+      });
+
+      row.append(ic, meta, closeBtn);
+      listEl.appendChild(row);
+    }
+  }
+
+  function toggleOpenTabsPopover() {
+    const pop = $('openTabsPopover');
+    const btn = $('openTabsPickerBtn');
+    if (!pop || !btn) return;
+    if (isOpenTabsPopoverOpen()) {
+      closeOpenTabsPopover();
+      return;
+    }
+    const docs = getVisibleTabDocs();
+    if (!docs.length) return;
+    $('treeContextMenu')?.classList.add('is-hidden');
+    $('tabContextMenu')?.classList.add('is-hidden');
+    state.openTabsFilterQuery = '';
+    const inputEl = $('openTabsFilterInput');
+    if (inputEl) inputEl.value = '';
+    pop.classList.remove('is-hidden');
+    btn.setAttribute('aria-expanded', 'true');
+    renderOpenTabsPopoverList();
+    inputEl?.focus();
+  }
+
+  function showTabContextMenu(x, y, doc) {
+    if (!doc?.path) return;
+    const menu = $('tabContextMenu');
+    if (!menu) return;
+    $('treeContextMenu')?.classList.add('is-hidden');
+    closeOpenTabsPopover();
+
+    state.tabContextTarget = doc;
+    const docs = getVisibleTabDocs();
+    const docKey = pathKey(doc.path);
+    const idx = docs.findIndex((d) => pathKey(d.path) === docKey);
+
+    const btnOthers = menu.querySelector('[data-tab-action="close-others"]');
+    const btnRight = menu.querySelector('[data-tab-action="close-right"]');
+    const btnAll = menu.querySelector('[data-tab-action="close-all"]');
+    if (btnOthers) btnOthers.disabled = docs.length <= 1;
+    if (btnRight) btnRight.disabled = idx < 0 || idx >= docs.length - 1;
+    if (btnAll) btnAll.disabled = docs.length === 0;
+
+    menu.classList.remove('is-hidden');
+    const mw = menu.offsetWidth || 195;
+    const mh = menu.offsetHeight || 210;
+    const maxX = Math.max(6, global.innerWidth - mw - 6);
+    const maxY = Math.max(6, global.innerHeight - mh - 6);
+    menu.style.left = `${Math.max(6, Math.min(x, maxX))}px`;
+    menu.style.top = `${Math.max(6, Math.min(y, maxY))}px`;
+  }
+
+  $('tabContextMenu')?.addEventListener('click', async (e) => {
+    const btn = e.target.closest('button[data-tab-action]');
+    if (!btn || btn.disabled || !state.tabContextTarget) return;
+    const doc = state.tabContextTarget;
+    const act = btn.dataset.tabAction;
+    $('tabContextMenu')?.classList.add('is-hidden');
+    if (act === 'locate-tree') {
+      await revealFileInTree(doc);
+    } else if (act === 'close-self') {
+      await closeTab(doc);
+    } else if (act === 'close-others') {
+      await closeOtherTabs(doc);
+    } else if (act === 'close-right') {
+      await closeRightTabs(doc);
+    } else if (act === 'close-all') {
+      await closeAllTabs();
+    }
+  });
+
   function renderProducedStrip() {
     const listEl = $('producedList');
     const docs = getVisibleTabDocs();
+
+    const pickerBtn = $('openTabsPickerBtn');
+    const countEl = $('openTabsCountText');
+    if (pickerBtn) {
+      const hasTabs = docs.length > 0;
+      pickerBtn.classList.toggle('is-hidden', !hasTabs);
+      if (countEl) countEl.textContent = String(docs.length);
+      pickerBtn.title = hasTabs
+        ? `速查全部 ${docs.length} 个已打开标签页`
+        : '搜索与快速切换已打开的标签页';
+      if (!hasTabs) closeOpenTabsPopover();
+    }
+    if (isOpenTabsPopoverOpen()) {
+      renderOpenTabsPopoverList();
+    }
+
+    const closeAllBtn = $('closeAllTabsBtn');
+    if (closeAllBtn) {
+      const hasTabs = docs.length > 0;
+      closeAllBtn.classList.toggle('is-hidden', !hasTabs);
+      closeAllBtn.disabled = !hasTabs;
+      closeAllBtn.title = hasTabs
+        ? `关闭当前 ${docs.length} 个已打开标签页`
+        : '关闭所有已打开的标签页';
+    }
 
     listEl.innerHTML = '';
     if (!docs.length) {
@@ -1058,6 +1525,18 @@
         openFilePreview(doc);
       };
       tab.addEventListener('click', activate);
+      tab.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        showTabContextMenu(e.clientX, e.clientY, doc);
+      });
+      tab.addEventListener('auxclick', (e) => {
+        if (e.button === 1) {
+          e.preventDefault();
+          e.stopPropagation();
+          closeTab(doc);
+        }
+      });
       tab.addEventListener('keydown', (e) => {
         if (e.target.closest('.ws-tab-close')) return;
         if (e.key === 'Enter' || e.key === ' ') {
@@ -1076,6 +1555,34 @@
     $('producedFilterBtn').textContent = state.producedOnlyDocs ? '仅看文档' : '全部文件';
     $('producedFilterBtn').classList.toggle('is-active', !state.producedOnlyDocs);
     renderProducedStrip();
+  });
+
+  $('openTabsPickerBtn')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    toggleOpenTabsPopover();
+  });
+
+  $('openTabsFilterInput')?.addEventListener('input', (e) => {
+    state.openTabsFilterQuery = e.target.value;
+    renderOpenTabsPopoverList();
+  });
+
+  $('openTabsFilterInput')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      closeOpenTabsPopover();
+      $('openTabsPickerBtn')?.focus();
+    } else if (e.key === 'Enter') {
+      const firstItem = $('openTabsPopoverList')?.querySelector('.ws-tabs-popover-item');
+      if (firstItem) {
+        e.preventDefault();
+        firstItem.click();
+      }
+    }
+  });
+
+  $('closeAllTabsBtn')?.addEventListener('click', () => {
+    closeAllTabs();
   });
 
   async function pollProducedDocs() {

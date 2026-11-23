@@ -75,7 +75,23 @@
       <div id="producedList" class="ws-produced-list" role="tablist" aria-label="打开的文档">
         <span class="ws-produced-empty">暂无打开的文档</span>
       </div>
-      <button id="producedFilterBtn" class="ws-chip-btn" type="button" title="切换显示仅文档或全部修改文件">仅看文档</button>
+      <div class="ws-produced-actions">
+        <button id="openTabsPickerBtn" class="ws-chip-btn is-hidden" type="button" title="搜索与快速切换已打开的标签页" aria-label="搜索已打开的标签页" aria-expanded="false">
+          <span class="ws-chip-icon" data-ws-icon="ui-list" data-size="11"></span><span id="openTabsCountText">0</span>
+        </button>
+        <button id="closeAllTabsBtn" class="ws-chip-btn ws-chip-danger is-hidden" type="button" title="关闭所有已打开的标签页" aria-label="关闭所有已打开的标签页" disabled>
+          <span class="ws-chip-icon" data-ws-icon="ui-close" data-size="11"></span><span>关闭全部</span>
+        </button>
+        <button id="producedFilterBtn" class="ws-chip-btn" type="button" title="切换显示仅文档或全部修改文件">仅看文档</button>
+      </div>
+      <!-- 已打开标签页速查与过滤面板 -->
+      <div id="openTabsPopover" class="ws-tabs-popover is-hidden" role="dialog" aria-label="已打开标签页速查">
+        <div class="ws-tabs-popover-search">
+          <span class="ws-search-icon" data-ws-icon="ui-search" data-size="12"></span>
+          <input id="openTabsFilterInput" type="search" placeholder="输入文件名筛选已打开标签..." autocomplete="off" spellcheck="false">
+        </div>
+        <div id="openTabsPopoverList" class="ws-tabs-popover-list" role="listbox"></div>
+      </div>
     </section>
 
     <!-- Workbench Main Split View -->
@@ -131,6 +147,7 @@
                 <path d="M13.5 2.5v2.7h-2.7"/>
               </svg>
             </button>
+            <button id="previewLocateTreeBtn" class="ws-btn-ghost" type="button" title="在左侧文件树中展开目录并高亮定位当前文件">定位文件</button>
             <button id="previewOpenNativeBtn" class="ws-btn-ghost" type="button" title="在 Antigravity 原生标签页中打开">原生打开</button>
             <button id="previewSendPathBtn" class="ws-btn-ghost" type="button" title="将此文件路径发送给当前对话">发路径</button>
           </div>
@@ -195,6 +212,16 @@
       <button type="button" data-action="copy-rel"><span data-ws-icon="ui-copy" data-size="14"></span><span>复制相对路径</span></button>
       <button type="button" data-action="copy-abs"><span data-ws-icon="ui-copy" data-size="14"></span><span>复制绝对路径</span></button>
       <button type="button" data-action="send-path"><span data-ws-icon="ui-quote" data-size="14"></span><span>发送文件路径给 AI</span></button>
+    </div>
+
+    <!-- 标签栏右键快捷菜单 -->
+    <div id="tabContextMenu" class="ws-context-menu is-hidden" role="menu">
+      <button type="button" data-tab-action="locate-tree"><span data-ws-icon="ui-search" data-size="14"></span><span>在文件树中定位</span></button>
+      <hr>
+      <button type="button" data-tab-action="close-self"><span data-ws-icon="ui-close" data-size="14"></span><span>关闭此标签</span></button>
+      <button type="button" data-tab-action="close-others"><span data-ws-icon="ui-close" data-size="14"></span><span>关闭其他标签</span></button>
+      <button type="button" data-tab-action="close-right"><span data-ws-icon="ui-close" data-size="14"></span><span>关闭右侧标签</span></button>
+      <button type="button" data-tab-action="close-all"><span data-ws-icon="ui-close" data-size="14"></span><span>关闭全部标签</span></button>
     </div>
 
     <!-- Floating Selection Quote Button -->

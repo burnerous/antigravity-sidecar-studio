@@ -65,8 +65,22 @@
     let activeFilter = 'all';
     let searchQuery = '';
     let pollTimer = null;
+    let searchDebounceTimer = null;
+    let chunkRenderRaf = null;
+    let renderSeq = 0;
     let visible = false;
     const fullCache = new Map();
+    const openDetailsKeys = new Set(); // 记录已展开折叠框的 key，避免单卡替换或刷新后丢失展开状态
+
+    const FIRST_BATCH_SIZE = 120;
+    const NEXT_BATCH_SIZE = 250;
+
+    function cancelChunkRender() {
+      if (chunkRenderRaf !== null) {
+        global.cancelAnimationFrame?.(chunkRenderRaf);
+        chunkRenderRaf = null;
+      }
+    }
 
     function cacheKeyFor(convId, stepIndex) {
       return `${convId || ''}:${stepIndex}`;
@@ -82,6 +96,24 @@
       }
     }
 
+    // 惰性缓存步骤的可检索小写文本，避免每次搜索或增量筛选都反复执行 JSON.stringify
+    function getSearchHaystack(step) {
+      if (typeof step._searchHay === 'string') return step._searchHay;
+      const parts = [step.content, step.thinking, step.error, step.type];
+      if (Array.isArray(step.tool_calls)) {
+        for (const t of step.tool_calls) {
+          parts.push(t.name, t.summary);
+          if (t.args && typeof t.args === 'object') {
+            for (const [k, v] of Object.entries(t.args)) {
+              parts.push(k, typeof v === 'string' ? v : JSON.stringify(v));
+            }
+          }
+        }
+      }
+      step._searchHay = parts.filter(Boolean).join('\n').toLowerCase();
+      return step._searchHay;
+    }
+
     function matchesFilter(step) {
       if (activeFilter === 'user' && step.kind !== 'user') return false;
       if (activeFilter === 'assistant' && step.kind !== 'assistant') return false;
@@ -91,18 +123,53 @@
 
       if (searchQuery) {
         const q = searchQuery.toLowerCase();
-        const hay = [
-          step.content,
-          step.thinking,
-          step.error,
-          step.type,
-          ...(step.tool_calls || []).map((t) => `${t.name} ${t.summary} ${JSON.stringify(t.args)}`),
-        ]
-          .join('\n')
-          .toLowerCase();
-        if (!hay.includes(q)) return false;
+        if (!getSearchHaystack(step).includes(q)) return false;
       }
       return true;
+    }
+
+    function updateBadge() {
+      if (steps.length > 0) {
+        badgeEl.textContent = String(steps.length);
+        badgeEl.classList.remove('is-hidden');
+      } else {
+        badgeEl.classList.add('is-hidden');
+      }
+    }
+
+    // 按需挂载折叠卡片正文：默认仅渲染 <summary>，用户真正点开时才生成正文节点与格式化 JSON
+    function createLazyDetails({ detailKey, iconName, labelText, getBodyText }) {
+      const det = document.createElement('details');
+      det.className = 'ws-step-details';
+
+      const sum = document.createElement('summary');
+      sum.innerHTML = `${iconHtml(iconName, 13)}<span>${escapeHtml(labelText)}</span>`;
+      det.appendChild(sum);
+
+      let bodyEl = null;
+      const ensureBodyMounted = () => {
+        if (bodyEl) return;
+        bodyEl = document.createElement('div');
+        bodyEl.className = 'ws-step-details-body';
+        bodyEl.textContent = getBodyText();
+        det.appendChild(bodyEl);
+      };
+
+      if (openDetailsKeys.has(detailKey)) {
+        det.open = true;
+        ensureBodyMounted();
+      }
+
+      det.addEventListener('toggle', () => {
+        if (det.open) {
+          openDetailsKeys.add(detailKey);
+          ensureBodyMounted();
+        } else {
+          openDetailsKeys.delete(detailKey);
+        }
+      });
+
+      return det;
     }
 
     function renderStepCard(step) {
@@ -133,42 +200,39 @@
       const thinkingText = fullDetail ? fullDetail.thinking : step.thinking;
 
       if (thinkingText) {
-        const det = document.createElement('details');
-        det.className = 'ws-step-details';
-        const sum = document.createElement('summary');
         const heading = step.thinkingHeading ? ` · ${step.thinkingHeading}` : '';
-        sum.innerHTML = `${iconHtml('ui-thinking', 13)}<span>思考过程${escapeHtml(heading)}</span>`;
-        const body = document.createElement('div');
-        body.className = 'ws-step-details-body';
-        body.textContent = thinkingText;
-        det.append(sum, body);
-        card.appendChild(det);
+        card.appendChild(
+          createLazyDetails({
+            detailKey: `${step.step_index}:thinking`,
+            iconName: 'ui-thinking',
+            labelText: `思考过程${heading}`,
+            getBodyText: () => thinkingText,
+          })
+        );
       }
 
       if (step.tool_calls?.length) {
-        for (const tc of step.tool_calls) {
-          const det = document.createElement('details');
-          det.className = 'ws-step-details';
-          const sum = document.createElement('summary');
-          sum.innerHTML = `${iconHtml('ui-tool', 13)}<span>${escapeHtml(tc.summary || tc.name)}</span>`;
-          const body = document.createElement('div');
-          body.className = 'ws-step-details-body';
-          body.textContent = JSON.stringify(tc.args || {}, null, 2);
-          det.append(sum, body);
-          card.appendChild(det);
-        }
+        step.tool_calls.forEach((tc, tcIdx) => {
+          card.appendChild(
+            createLazyDetails({
+              detailKey: `${step.step_index}:tc:${tcIdx}`,
+              iconName: 'ui-tool',
+              labelText: tc.summary || tc.name,
+              getBodyText: () => JSON.stringify(tc.args || {}, null, 2),
+            })
+          );
+        });
       }
 
       if (step.kind === 'tool_result' && contentText) {
-        const det = document.createElement('details');
-        det.className = 'ws-step-details';
-        const sum = document.createElement('summary');
-        sum.innerHTML = `${iconHtml('ui-inbox', 13)}<span>工具返回 (${contentText.length} 字符)</span>`;
-        const body = document.createElement('div');
-        body.className = 'ws-step-details-body';
-        body.textContent = contentText;
-        det.append(sum, body);
-        card.appendChild(det);
+        card.appendChild(
+          createLazyDetails({
+            detailKey: `${step.step_index}:tool_result`,
+            iconName: 'ui-inbox',
+            labelText: `工具返回 (${contentText.length} 字符)`,
+            getBodyText: () => contentText,
+          })
+        );
       } else if (contentText) {
         const body = document.createElement('div');
         body.className = 'ws-step-body';
@@ -208,7 +272,8 @@
             }
             if (json?.success && json.detail) {
               putFullCache(resolvedConvId, step.step_index, json.detail);
-              renderAll();
+              // 仅原地替换当前这一张步骤卡片，保留其余卡片 DOM 与折叠展开状态
+              card.replaceWith(renderStepCard(step));
               showToast?.(
                 json.detail.fromFullFile
                   ? '已从 transcript_full.jsonl 加载完整步骤'
@@ -244,8 +309,11 @@
     }
 
     function renderAll({ scrollBottom = false } = {}) {
+      cancelChunkRender();
+      const seq = ++renderSeq;
       const filtered = steps.filter(matchesFilter);
       listEl.innerHTML = '';
+      updateBadge();
 
       if (!filtered.length) {
         const empty = document.createElement('div');
@@ -254,22 +322,69 @@
           ? '当前筛选条件下没有匹配的轨迹步骤'
           : '当前会话暂无 transcript.jsonl 轨迹记录';
         listEl.appendChild(empty);
-      } else {
-        const frag = document.createDocumentFragment();
-        for (const s of filtered) {
-          frag.appendChild(renderStepCard(s));
-        }
-        listEl.appendChild(frag);
+        return;
+      }
+
+      const firstEnd = Math.min(FIRST_BATCH_SIZE, filtered.length);
+      const frag = document.createDocumentFragment();
+      for (let i = 0; i < firstEnd; i++) {
+        frag.appendChild(renderStepCard(filtered[i]));
+      }
+      listEl.appendChild(frag);
+
+      if (firstEnd >= filtered.length) {
         if (scrollBottom && followToggleEl?.checked) {
           listEl.scrollTop = listEl.scrollHeight;
         }
+        return;
       }
 
-      if (steps.length > 0) {
-        badgeEl.textContent = String(steps.length);
-        badgeEl.classList.remove('is-hidden');
-      } else {
-        badgeEl.classList.add('is-hidden');
+      // 超长会话分批挂载剩余步骤，避免一次性创建数万 DOM 节点卡死主线程
+      let cursor = firstEnd;
+      const mountNextBatch = () => {
+        if (seq !== renderSeq) {
+          chunkRenderRaf = null;
+          return;
+        }
+        const batchEnd = Math.min(cursor + NEXT_BATCH_SIZE, filtered.length);
+        const batchFrag = document.createDocumentFragment();
+        for (let i = cursor; i < batchEnd; i++) {
+          batchFrag.appendChild(renderStepCard(filtered[i]));
+        }
+        listEl.appendChild(batchFrag);
+        cursor = batchEnd;
+
+        if (cursor < filtered.length) {
+          chunkRenderRaf = global.requestAnimationFrame(mountNextBatch);
+        } else {
+          chunkRenderRaf = null;
+          if (scrollBottom && followToggleEl?.checked) {
+            listEl.scrollTop = listEl.scrollHeight;
+          }
+        }
+      };
+      chunkRenderRaf = global.requestAnimationFrame(mountNextBatch);
+    }
+
+    function appendSteps(newSteps, { scrollBottom = false } = {}) {
+      updateBadge();
+      if (!Array.isArray(newSteps) || !newSteps.length) return;
+      if (chunkRenderRaf !== null) {
+        renderAll({ scrollBottom });
+        return;
+      }
+      const matching = newSteps.filter(matchesFilter);
+      if (!matching.length) return;
+      const emptyEl = listEl.querySelector('.ws-traj-empty');
+      if (emptyEl) emptyEl.remove();
+
+      const frag = document.createDocumentFragment();
+      for (const s of matching) {
+        frag.appendChild(renderStepCard(s));
+      }
+      listEl.appendChild(frag);
+      if (scrollBottom && followToggleEl?.checked) {
+        listEl.scrollTop = listEl.scrollHeight;
       }
     }
 
@@ -293,6 +408,7 @@
         if (convChanged || force) {
           fullCache.clear();
           if (convChanged) {
+            openDetailsKeys.clear();
             steps = [];
             sig = '';
           }
@@ -317,7 +433,8 @@
           renderAll({ scrollBottom: true });
         } else if (Array.isArray(data.steps) && data.steps.length > 0) {
           steps.push(...data.steps);
-          renderAll({ scrollBottom: true });
+          // 轮询仅追加新增步骤，不重建已有卡片 DOM
+          appendSteps(data.steps, { scrollBottom: true });
         }
         if (resolvedConvId) {
           const tag = convSource === 'host' ? '当前对话' : '最新活跃对话';
@@ -339,8 +456,12 @@
     });
 
     searchInputEl?.addEventListener('input', () => {
-      searchQuery = searchInputEl.value.trim();
-      renderAll();
+      if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+      searchDebounceTimer = setTimeout(() => {
+        searchDebounceTimer = null;
+        searchQuery = searchInputEl.value.trim();
+        renderAll();
+      }, 120);
     });
 
     refreshBtnEl?.addEventListener('click', () => refresh({ force: true }));
@@ -367,6 +488,8 @@
       refresh,
       destroy: () => {
         if (pollTimer) clearInterval(pollTimer);
+        if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+        cancelChunkRender();
       },
     };
   }

@@ -261,8 +261,27 @@ input::placeholder, textarea::placeholder {
   font-weight: 500;
 }
 
+.ws-chip-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.ws-chip-btn.ws-chip-danger:hover:not(:disabled) {
+  color: var(--ws-danger);
+  border-color: color-mix(in srgb, var(--ws-danger) 48%, var(--ws-border));
+  background: color-mix(in srgb, var(--ws-danger) 12%, transparent);
+}
+
+.ws-chip-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 /* Produced Docs Strip */
 .ws-produced-strip {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -281,6 +300,130 @@ input::placeholder, textarea::placeholder {
   flex: 1;
   min-width: 0;
   padding: 1px 0;
+}
+
+.ws-produced-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+}
+
+/* Open Tabs Quick Switcher Popover */
+.ws-tabs-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 10px;
+  z-index: 75;
+  width: min(320px, calc(100vw - 20px));
+  max-height: 320px;
+  display: flex;
+  flex-direction: column;
+  background: var(--ws-surface);
+  border: 1px solid var(--ws-border-strong);
+  border-radius: 10px;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.42);
+  overflow: hidden;
+}
+
+.ws-tabs-popover-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--ws-border);
+  background: var(--ws-card);
+}
+
+.ws-tabs-popover-search input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  outline: none;
+  font-size: 12px;
+  color: var(--ws-fg);
+}
+
+.ws-tabs-popover-list {
+  overflow-y: auto;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ws-tabs-popover-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 7px;
+  border-radius: 7px;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.12s;
+}
+
+.ws-tabs-popover-item:hover,
+.ws-tabs-popover-item:focus-visible {
+  background: var(--ws-card-hover);
+  outline: none;
+}
+
+.ws-tabs-popover-item.is-active {
+  background: var(--ws-primary-soft);
+}
+
+.ws-tabs-popover-meta {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.ws-tabs-popover-name {
+  font-size: 12px;
+  color: var(--ws-fg);
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ws-tabs-popover-path {
+  font-size: 10.5px;
+  color: var(--ws-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ws-tabs-popover-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--ws-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.12s, color 0.12s;
+}
+
+.ws-tabs-popover-close:hover {
+  background: color-mix(in srgb, var(--ws-danger) 16%, transparent);
+  color: var(--ws-danger);
+}
+
+.ws-tabs-popover-empty {
+  padding: 16px 10px;
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--ws-muted);
 }
 
 .ws-produced-empty {
@@ -539,6 +682,19 @@ input::placeholder, textarea::placeholder {
   background: var(--ws-primary-soft);
   color: var(--ws-fg);
   font-weight: 500;
+}
+
+@keyframes wsLocatePulse {
+  0% {
+    box-shadow: 0 0 0 2px var(--ws-primary), 0 0 0 6px color-mix(in srgb, var(--ws-primary) 26%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 1px transparent, 0 0 0 0 transparent;
+  }
+}
+
+.ws-tree-row.is-located-flash {
+  animation: wsLocatePulse 1.4s ease-out forwards;
 }
 
 .ws-tree-row.is-ignored {
@@ -1324,9 +1480,7 @@ input::placeholder, textarea::placeholder {
   flex: 1;
   overflow-y: auto;
   padding: 10px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
+  display: block;
 }
 
 .ws-traj-empty {
@@ -1342,6 +1496,13 @@ input::placeholder, textarea::placeholder {
   border-radius: 8px;
   background: var(--ws-surface);
   padding: 8px 10px;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 88px;
+  contain: layout style;
+}
+
+.ws-step-card + .ws-step-card {
+  margin-top: 9px;
 }
 
 .ws-step-card.kind-user {
@@ -1476,6 +1637,12 @@ input::placeholder, textarea::placeholder {
 
 .ws-context-menu button:hover {
   background: var(--ws-primary-soft);
+}
+
+.ws-context-menu button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
 .ws-context-menu hr {
