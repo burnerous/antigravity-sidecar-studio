@@ -2,7 +2,7 @@
   "name": "antigravity-sidecar-studio",
   "displayName": "Sidecar Studio",
   "description": "Google Antigravity 全局三合一侧边栏工作台：自动同步项目文件树、Word/Excel/PPT/PDF 离线高保真实时预览与编辑、划词引用发给 AI，以及只读对话轨迹查看器。",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": {
     "name": "Lu0H1N (burnerous)",
     "url": "https://github.com/burnerous"
