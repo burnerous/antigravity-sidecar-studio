@@ -18,17 +18,6 @@
     }[c]));
   }
 
-  const SAFE_IMAGE_MIMES = {
-    '.png': 'image/png',
-    '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.gif': 'image/gif',
-    '.webp': 'image/webp',
-    '.svg': 'image/svg+xml',
-    '.bmp': 'image/bmp',
-    '.ico': 'image/x-icon',
-  };
-
   async function renderTextOrImagePreview(ctx) {
     const {
       file,
@@ -42,106 +31,10 @@
       registerCleanup,
     } = ctx;
     let destroyed = false;
-    let objectUrl = '';
-
     const rawUrl = `/api/file/raw?path=${encodeURIComponent(file.path)}&conversationId=${encodeURIComponent(
       conversationId || ''
     )}&t=${Math.floor(file.mtimeMs || Date.now())}`;
 
-    // 1. Images (fetched via apiFetch -> Blob URL so custom-scheme/token gateways & attachment CSP work cleanly)
-    if (file.category === 'image') {
-      const imgDestroy = () => {
-        destroyed = true;
-        if (objectUrl) {
-          URL.revokeObjectURL(objectUrl);
-          objectUrl = '';
-        }
-      };
-      registerCleanup?.(imgDestroy);
-      onStatusBadge?.('图片预览');
-      let zoom = prevState?.zoom || 'fit';
-      let checker = prevState?.checker !== false;
-
-      const imgResp = await apiFetch(rawUrl, { method: 'GET' });
-      if (!imgResp.ok) throw new Error(`读取图片失败: HTTP ${imgResp.status}`);
-      const ab = await imgResp.arrayBuffer();
-      if (destroyed) return { getState: () => ({}), destroy: imgDestroy };
-      const mime = SAFE_IMAGE_MIMES[file.ext?.toLowerCase()] || 'application/octet-stream';
-      objectUrl = URL.createObjectURL(new Blob([ab], { type: mime }));
-
-      toolbarEl.classList.remove('is-hidden');
-      toolbarEl.innerHTML = '';
-      const left = document.createElement('div');
-      left.className = 'ws-toolbar-group';
-
-      const fitBtn = document.createElement('button');
-      fitBtn.type = 'button';
-      fitBtn.className = `ws-chip-btn ${zoom === 'fit' ? 'is-active' : ''}`;
-      fitBtn.textContent = '适应窗口';
-
-      const origBtn = document.createElement('button');
-      origBtn.type = 'button';
-      origBtn.className = `ws-chip-btn ${zoom === '100' ? 'is-active' : ''}`;
-      origBtn.textContent = '100% 原图';
-
-      const checkerBtn = document.createElement('button');
-      checkerBtn.type = 'button';
-      checkerBtn.className = `ws-chip-btn ${checker ? 'is-active' : ''}`;
-      checkerBtn.textContent = '透明棋盘格';
-
-      const metaSpan = document.createElement('span');
-      metaSpan.style.cssText = 'font-size:11px;color:var(--ws-muted);margin-left:6px;';
-
-      left.append(fitBtn, origBtn, checkerBtn, metaSpan);
-      toolbarEl.appendChild(left);
-
-      const drawImage = () => {
-        stageEl.innerHTML = '';
-        const box = document.createElement('div');
-        box.className = `ws-image-stage ${checker ? 'is-checker' : ''}`;
-        const img = document.createElement('img');
-        img.src = objectUrl;
-        img.alt = file.name;
-        img.style.cssText =
-          zoom === 'fit'
-            ? 'max-width:100%;max-height:calc(100vh - 180px);object-fit:contain;border-radius:4px;'
-            : 'max-width:none;border-radius:4px;';
-        img.onload = () => {
-          metaSpan.textContent = `${img.naturalWidth} × ${img.naturalHeight}px`;
-        };
-        box.appendChild(img);
-        stageEl.appendChild(box);
-      };
-
-      fitBtn.addEventListener('click', () => {
-        zoom = 'fit';
-        fitBtn.classList.add('is-active');
-        origBtn.classList.remove('is-active');
-        drawImage();
-      });
-      origBtn.addEventListener('click', () => {
-        zoom = '100';
-        origBtn.classList.add('is-active');
-        fitBtn.classList.remove('is-active');
-        drawImage();
-      });
-      checkerBtn.addEventListener('click', () => {
-        checker = !checker;
-        checkerBtn.classList.toggle('is-active', checker);
-        stageEl.querySelector('.ws-image-stage')?.classList.toggle('is-checker', checker);
-      });
-
-      drawImage();
-      return {
-        getState: () => ({ zoom, checker }),
-        destroy: () => {
-          destroyed = true;
-          if (objectUrl) URL.revokeObjectURL(objectUrl);
-        },
-      };
-    }
-
-    // 2. Text / Markdown / Code
     let autoSaveTimer = null;
     let splitPreviewTimer = null;
     let justSavedTimer = null;

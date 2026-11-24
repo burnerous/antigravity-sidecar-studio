@@ -3,6 +3,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import {
   closeSync,
   existsSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -21,7 +22,7 @@ import {
 import { request as httpRequest } from 'node:http';
 import { createRequire } from 'node:module';
 import { homedir, tmpdir } from 'node:os';
-import { dirname, extname, join, resolve } from 'node:path';
+import { basename, dirname, extname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { OfficeConverter } from './lib/office-converter.mjs';
@@ -66,6 +67,7 @@ const FILE_MIME_TYPES = {
 };
 
 const ACTIVE_DOC_EXTS = new Set(['.html', '.htm', '.svg', '.xml', '.xhtml']);
+const SAVE_AS_IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp']);
 const MAX_RAW_FILE_BYTES = 128 * 1024 * 1024; // 128 MB safety guard
 const MAX_HASH_VERSION_BYTES = 32 * 1024 * 1024; // 32 MB version digest limit
 const MAX_POST_BODY_BYTES = 180 * 1024 * 1024; // Early HTTP POST body limit (covers base64 up to 128 MiB)
@@ -655,6 +657,164 @@ export function createStudioServer({
     'POST'
   );
 
+  // POST /api/file/save-as
+  app.api(
+    '/api/file/save-as',
+    (data) => {
+      let tmpPath = '';
+      let ownsTemp = false;
+      try {
+        assertWorkspaceGen(data);
+        const convId = effectiveConvId();
+        const pathOptions = { appDataDir, convId, allowBrain: true };
+        const brainDir = security.getBrainConvDir(appDataDir, convId);
+        let brainRoot = appDataDir ? resolve(appDataDir, 'brain') : '';
+        if (brainRoot) {
+          try {
+            brainRoot = realpathSync(brainRoot);
+          } catch {
+            // The brain directory is optional for workspace sources.
+          }
+        }
+        const brainSysGenDir = brainDir ? join(brainDir, '.system_generated') : '';
+        const assertNotBrainSystemGenerated = (p) => {
+          if (brainSysGenDir && isUnderRoot(p, brainSysGenDir)) {
+            throw makeHttpError(403, 'Access denied: cannot save into .system_generated directory');
+          }
+        };
+        const assertSaveAsPath = (path, options) => {
+          const allowedPath = security.assertAllowedPath(path, { ...pathOptions, ...options });
+          assertNotBrainSystemGenerated(allowedPath);
+          if (brainRoot && isUnderRoot(allowedPath, brainRoot) && (!brainDir || !isUnderRoot(allowedPath, brainDir))) {
+            throw makeHttpError(403, 'Access denied: cannot save into another conversation brain directory');
+          }
+          return allowedPath;
+        };
+        const realSource = assertSaveAsPath(data?.sourcePath || '', {
+          mustExist: true,
+          expectFile: true,
+        });
+
+        const cleanName = typeof data?.fileName === 'string' ? data.fileName.trim() : '';
+        const invalidWindowsName = process.platform === 'win32' && (
+          /[<>"|?*\u0001-\u001f]/.test(cleanName) ||
+          /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])\s*\./i.test(cleanName)
+        );
+        if (
+          !cleanName || cleanName.length > 180 || /[\0/\\:]/.test(cleanName) ||
+          cleanName === '.' || cleanName === '..' || basename(cleanName) !== cleanName ||
+          invalidWindowsName
+        ) {
+          throw makeHttpError(400, 'Invalid image file name');
+        }
+        const ext = extname(cleanName);
+        if (!SAVE_AS_IMAGE_EXTS.has(ext.toLowerCase())) {
+          throw makeHttpError(400, 'Unsupported image extension (allowed: .png, .jpg, .jpeg, .webp)');
+        }
+
+        if (typeof data?.content !== 'string') {
+          throw makeHttpError(400, 'Missing content');
+        }
+        if (data.encoding !== undefined && data.encoding !== 'base64') {
+          throw makeHttpError(400, 'Invalid encoding (expected base64)');
+        }
+        const cleanB64 = data.content.replace(/\s+/g, '');
+        if (!isValidBase64(cleanB64)) {
+          throw makeHttpError(400, 'Invalid base64 payload');
+        }
+        const padding = cleanB64.endsWith('==') ? 2 : cleanB64.endsWith('=') ? 1 : 0;
+        const byteLength = (cleanB64.length / 4) * 3 - padding;
+        if (byteLength > MAX_RAW_FILE_BYTES) {
+          throw makeHttpError(413, 'Payload too large (' + byteLength + ' bytes)');
+        }
+        const buf = Buffer.from(cleanB64, 'base64');
+        if (!buf.length) throw makeHttpError(400, 'Refusing to write empty binary payload');
+
+        const targetDir = dirname(realSource);
+        const stem = cleanName.slice(0, -ext.length);
+        const overwrite = data.overwrite === true;
+        const autoRename = !overwrite && data.autoRename === true;
+        const assertOriginalDirectory = () => {
+          const directory = assertSaveAsPath(targetDir, { expectDir: true });
+          if (directory !== targetDir) throw makeHttpError(403, 'Target directory changed during save');
+        };
+        const targetStatus = (targetPath) => {
+          assertSaveAsPath(targetPath, { mustExist: false });
+          const entry = lstatSync(targetPath, { throwIfNoEntry: false });
+          if (overwrite && entry && (!entry.isFile() || realpathSync(targetPath) !== targetPath)) {
+            throw makeHttpError(403, 'Target must be a regular file at the requested path');
+          }
+          return entry;
+        };
+
+        assertOriginalDirectory();
+        for (let suffix = 1; suffix <= (autoRename ? 999 : 1); suffix++) {
+          const name = suffix === 1 ? cleanName : stem + '_' + suffix + ext;
+          const targetPath = join(targetDir, name);
+          if (targetStatus(targetPath) && !overwrite) continue;
+
+          if (!ownsTemp) {
+            tmpPath = targetPath + '.' + process.pid + '.' + Date.now() + '.' +
+              randomBytes(4).toString('hex') + '.ws-tmp';
+            const tmpFd = openSync(tmpPath, 'wx');
+            ownsTemp = true;
+            try {
+              writeFileSync(tmpFd, buf);
+            } finally {
+              closeSync(tmpFd);
+            }
+          }
+
+          assertOriginalDirectory();
+          if (overwrite) {
+            targetStatus(targetPath);
+            renameSync(tmpPath, targetPath);
+            ownsTemp = false;
+          } else {
+            // Publishing a completed file with link is atomic and preserves concurrent creations.
+            try {
+              linkSync(tmpPath, targetPath);
+            } catch (err) {
+              if (err?.code === 'EEXIST') continue;
+              throw err;
+            }
+          }
+
+          const nextSt = statSync(targetPath);
+          const root = security.getRootPaths().find((path) => isUnderRoot(targetPath, path));
+          const relBase = root || (brainDir && isUnderRoot(targetPath, brainDir) ? brainDir : '');
+          return jsonResponse(ResponseClass, {
+            success: true,
+            path: targetPath,
+            relPath: relBase ? relative(relBase, targetPath).replace(/\\/g, '/') : name,
+            name,
+            mtimeMs: nextSt.mtimeMs,
+            size: nextSt.size,
+            version: versionFromBuffer(nextSt, nextSt.size <= MAX_HASH_VERSION_BYTES ? buf : null),
+          });
+        }
+        return jsonResponse(ResponseClass, { success: false, conflict: true, error: '目标文件已存在' }, 409);
+      } catch (err) {
+        if (['EPERM', 'EBUSY', 'EACCES'].includes(err?.code)) {
+          return jsonResponse(
+            ResponseClass,
+            { success: false, locked: true, error: '目标文件或目录无法写入，原子保存失败' },
+            423
+          );
+        }
+        if (['ENAMETOOLONG', 'EINVAL'].includes(err?.code)) {
+          return jsonResponse(ResponseClass, { success: false, error: 'Invalid image file name' }, 400);
+        }
+        return handleApiError(ResponseClass, err);
+      } finally {
+        if (ownsTemp) {
+          try { unlinkSync(tmpPath); } catch {}
+        }
+      }
+    },
+    'POST'
+  );
+
   const handleDocConvert = async (data) => {
     try {
       assertWorkspaceGen(data);
@@ -938,6 +1098,13 @@ async function runSelfTests() {
     assert.equal(rHome.status, 200);
     const homeHtml = await rHome.text();
     assert.ok(homeHtml.includes('/preload.js'), 'index.html must include /preload.js');
+    const imageScript = homeHtml.indexOf('<script src="/previewers/image-viewer.js"></script>');
+    const appScript = homeHtml.indexOf('<script src="/app.js"></script>');
+    assert.ok(imageScript >= 0 && imageScript < appScript, 'image previewer must load before app.js');
+    const rImagePreviewer = await fetch(base + '/previewers/image-viewer.js');
+    assert.equal(rImagePreviewer.status, 200);
+    assert.match(rImagePreviewer.headers.get('content-type'), /^application\/javascript/);
+    assert.match(await rImagePreviewer.text(), /WSModules\.renderImagePreview/);
 
     const rPreload = await fetch(`${base}/preload.js`);
     assert.equal(rPreload.status, 200);
@@ -1424,6 +1591,126 @@ async function runSelfTests() {
       cellStyles: true,
     });
     assert.equal(wbReopen2.Sheets.Sheet1['C2']?.f, 'A2+B2');
+
+    // 11. POST /api/file/save-as (auth, workspace scope, validation, and atomic save)
+    const pngContent = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4H+DwHwAGcAKPWYT7MwAAAABJRU5ErkJggg==';
+    const replacementPng = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGMQcPj/HwAEAgJPwWUUsQAAAABJRU5ErkJggg==';
+    const samplePng = join(wsDir, 'sample.png');
+    const editedPng = join(realpathSync(wsDir), 'sample_edited.png');
+    writeFileSync(samplePng, Buffer.from(pngContent, 'base64'));
+    const saveAs = (fields = {}, auth = true) =>
+      fetch(base + '/api/file/save-as', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(auth ? { 'X-Sidecar-Token': token } : {}),
+        },
+        body: JSON.stringify({
+          sourcePath: samplePng,
+          fileName: 'sample_edited.png',
+          encoding: 'base64',
+          content: pngContent,
+          workspaceGen: curGen,
+          ...fields,
+        }),
+      });
+
+    assert.equal((await saveAs({}, false)).status, 401, 'save-as requires a token');
+    for (const fileName of ['../evil.png', 'sub/evil.png', 'a\\b.png', 'a:b.png', 'a\0b.png', '.', '..', '']) {
+      assert.equal((await saveAs({ fileName })).status, 400, 'invalid save-as name: ' + fileName);
+    }
+    for (const fileName of ['evil.js', 'evil.svg', 'evil.html']) {
+      const denied = await saveAs({ fileName });
+      assert.equal(denied.status, 400);
+      assert.match((await denied.json()).error, /Unsupported image extension/);
+    }
+    assert.equal((await saveAs({ sourcePath: escapePath })).status, 403);
+    assert.equal((await saveAs({ sourcePath: trPath })).status, 403);
+    assert.equal((await saveAs({ workspaceGen: curGen - 1 })).status, 409);
+    for (const content of ['', '    ', 'not base64!', 123]) {
+      assert.equal((await saveAs({ content })).status, 400);
+    }
+    assert.equal((await saveAs({ encoding: 'utf8' })).status, 400);
+    assert.equal(existsSync(editedPng), false);
+
+    const created = await saveAs({
+      fileName: ' sample_edited.png ',
+      content: pngContent.slice(0, 40) + '\n' + pngContent.slice(40),
+    });
+    assert.equal(created.status, 200);
+    const createdJson = await created.json();
+    const pngBytes = Buffer.from(pngContent, 'base64');
+    assert.equal(createdJson.success, true);
+    assert.equal(createdJson.path, editedPng);
+    assert.equal(createdJson.relPath, 'sample_edited.png');
+    assert.equal(createdJson.name, 'sample_edited.png');
+    assert.equal(createdJson.size, pngBytes.length);
+    assert.equal(createdJson.mtimeMs, statSync(editedPng).mtimeMs);
+    assert.equal(createdJson.version, versionFromBuffer(statSync(editedPng), pngBytes));
+    assert.deepEqual(readFileSync(editedPng), pngBytes);
+
+    const duplicate = await saveAs({ overwrite: false, autoRename: false, content: replacementPng });
+    assert.equal(duplicate.status, 409);
+    assert.equal((await duplicate.json()).conflict, true);
+    assert.deepEqual(readFileSync(editedPng), pngBytes);
+
+    const renamed = await saveAs({ autoRename: true });
+    assert.equal(renamed.status, 200);
+    const renamedJson = await renamed.json();
+    assert.equal(renamedJson.relPath, 'sample_edited_2.png');
+    assert.equal(renamedJson.path, join(realpathSync(wsDir), 'sample_edited_2.png'));
+    assert.deepEqual(readFileSync(renamedJson.path), pngBytes);
+
+    const overwritten = await saveAs({ overwrite: true, content: replacementPng });
+    assert.equal(overwritten.status, 200);
+    assert.equal((await overwritten.json()).path, editedPng);
+    assert.deepEqual(readFileSync(editedPng), Buffer.from(replacementPng, 'base64'));
+    assert.deepEqual(readFileSync(samplePng), pngBytes, 'save-as must preserve the source');
+
+    const brainDir = join(appDataDir, 'brain', convId);
+    const brainCover = join(brainDir, 'ai_cover.png');
+    const brainCopyName = 'ai_cover_annotated.png';
+    writeFileSync(brainCover, pngBytes);
+    const savedBrainCover = await saveAs({ sourcePath: brainCover, fileName: brainCopyName });
+    assert.equal(savedBrainCover.status, 200, 'save-as allows images in the active conversation brain');
+    const savedBrainCoverJson = await savedBrainCover.json();
+    const expectedBrainCopy = join(realpathSync(brainDir), brainCopyName);
+    assert.equal(savedBrainCoverJson.relPath, brainCopyName);
+    assert.equal(savedBrainCoverJson.path, expectedBrainCopy);
+    assert.deepEqual(readFileSync(expectedBrainCopy), pngBytes);
+
+    const uploadDir = join(brainDir, '.user_uploaded');
+    const uploadedImage = join(uploadDir, 'input.png');
+    mkdirSync(uploadDir);
+    writeFileSync(uploadedImage, pngBytes);
+    const savedUpload = await saveAs({ sourcePath: uploadedImage, fileName: 'input_annotated.png' });
+    assert.equal(savedUpload.status, 200, 'save-as allows images in active brain subdirectories');
+    assert.equal((await savedUpload.json()).relPath, '.user_uploaded/input_annotated.png');
+    assert.deepEqual(readFileSync(join(uploadDir, 'input_annotated.png')), pngBytes);
+
+    const sysImg = join(logsDir, 'sys.png');
+    writeFileSync(sysImg, pngBytes);
+    const deniedSysImg = await saveAs({ sourcePath: sysImg, fileName: 'sys_annotated.png' });
+    assert.equal(deniedSysImg.status, 403, 'save-as rejects images in .system_generated');
+    assert.equal(existsSync(join(logsDir, 'sys_annotated.png')), false);
+
+    const otherConvDir = join(appDataDir, 'brain', '22222222-2222-3333-4444-555555555555');
+    const otherConvImg = join(otherConvDir, 'other.png');
+    mkdirSync(otherConvDir);
+    writeFileSync(otherConvImg, pngBytes);
+    const deniedOtherConv = await saveAs({ sourcePath: otherConvImg, fileName: 'other_annotated.png' });
+    assert.equal(deniedOtherConv.status, 403, 'save-as rejects images in other conversations');
+    assert.equal(existsSync(join(otherConvDir, 'other_annotated.png')), false);
+
+    const overlappingWorkspace = studio.security.registerWorkspaceUris([pathToFileURL(appDataDir).href]);
+    assert.equal(overlappingWorkspace.roots.length, 1);
+    const deniedInOverlappingRoot = await saveAs({
+      sourcePath: otherConvImg,
+      fileName: 'other_annotated.png',
+      workspaceGen: overlappingWorkspace.generation,
+    });
+    assert.equal(deniedInOverlappingRoot.status, 403, 'a workspace root cannot grant access to another conversation');
+    assert.equal(existsSync(join(otherConvDir, 'other_annotated.png')), false);
 
     console.log(
       `[antigravity-sidecar-studio --test] ALL PASSED (staticRoutes=${studio.staticInfo.count}, xlsx=${XLSX.version}, converters=${JSON.stringify(healthJson.converters)})`

@@ -3,6 +3,7 @@
 
   const {
     renderDocxPreview,
+    renderImagePreview,
     renderPdfPreview,
     renderPptxPreview,
     renderTextOrImagePreview,
@@ -648,6 +649,8 @@
     const saveFile = async ({
       content,
       encoding = 'utf8',
+      baseVersion = null,
+      baseMtimeMs = null,
       force = false,
       expectedConflictMtimeMs = null,
       expectedConflictVersion = '',
@@ -666,8 +669,8 @@
           workspaceGen: state.workspaceGen,
           content,
           encoding,
-          baseMtimeMs: currentMtime,
-          baseVersion: currentVersion,
+          baseMtimeMs: baseMtimeMs ?? currentMtime,
+          baseVersion: baseVersion ?? currentVersion,
           force,
         };
         if (force) {
@@ -698,6 +701,8 @@
             return saveFile({
               content,
               encoding,
+              baseVersion,
+              baseMtimeMs,
               force: true,
               expectedConflictMtimeMs: conflictMtime,
               expectedConflictVersion: conflictVersion,
@@ -735,6 +740,34 @@
       }
     };
 
+    const saveAsFile = async ({
+      sourcePath = file.path, fileName, content, overwrite = false, autoRename = true,
+    } = {}) => {
+      try {
+        const res = await apiFetch('/api/file/save-as', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sourcePath, fileName, content, encoding: 'base64', overwrite, autoRename,
+            conversationId: state.conversationId,
+            workspaceGen: state.workspaceGen,
+          }),
+        });
+        const result = await res.json().catch(() => null);
+        if (!res.ok || !result?.success) {
+          const error = result?.error || 'HTTP ' + res.status;
+          showToast('另存失败：' + error, 2800);
+          return { success: false, error, status: res.status };
+        }
+        await reloadExpandedDirs().catch(() => {});
+        return result;
+      } catch (err) {
+        const error = err?.message || String(err);
+        showToast('另存失败：' + error, 2800);
+        return { success: false, error };
+      }
+    };
+
     const ctx = {
       file,
       stageEl: stage,
@@ -756,6 +789,8 @@
         cleanups.push(fn);
       },
       onSaveFile: saveFile,
+      onSaveAsFile: saveAsFile,
+      onSendToAgent: sendToAgent,
       onStatusBadge: (label) => {
         if (openSeq !== state.previewOpenSeq) return;
         if (label) {
@@ -780,6 +815,8 @@
         ctrl = await renderPptxPreview(ctx);
       } else if (file.category === 'pdf') {
         ctrl = await renderPdfPreview(ctx);
+      } else if (file.category === 'image' && typeof renderImagePreview === 'function') {
+        ctrl = await renderImagePreview(ctx);
       } else {
         ctrl = await renderTextOrImagePreview(ctx);
       }
@@ -1793,6 +1830,14 @@
         '.pptx': 'pptx',
         '.pdf': 'pdf',
         '.md': 'markdown',
+        '.png': 'image',
+        '.jpg': 'image',
+        '.jpeg': 'image',
+        '.webp': 'image',
+        '.svg': 'image',
+        '.gif': 'image',
+        '.bmp': 'image',
+        '.ico': 'image',
       };
       await openFilePreview({
         name,
