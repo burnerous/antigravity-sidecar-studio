@@ -464,6 +464,9 @@ async function main() {
     );
     console.log(`  ✓ SHA-256: ${sha256}`);
 
+    const shaSumsPath = join(tempRoot, 'SHA256SUMS.txt');
+    writeFileSync(shaSumsPath, `${sha256.toLowerCase()}  ${zipName}\n`, 'utf8');
+
     const releaseNotes = buildReleaseNotes({
       version,
       tag,
@@ -504,6 +507,7 @@ async function main() {
         'create',
         tag,
         zipPath,
+        shaSumsPath,
         '--title',
         `Sidecar Studio ${tag}`,
         '--notes-file',

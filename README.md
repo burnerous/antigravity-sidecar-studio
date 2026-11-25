@@ -132,6 +132,10 @@ npm test   # 可选：验证本地全套自测通过
 3. **对话轨迹查看器（Conversation Trajectory）**
    - 严格只读解析 `<appDataDir>/brain/<conversationId>/.system_generated/logs/transcript.jsonl`，支持宿主绑定会话隔离、增量字节游标解析、`transcript_full.jsonl` 按需流式读取展开、筛选搜索及文档路径一键直达预览。
 
+4. **Antigravity 内置检查更新与一键热升级**
+   - 侧边栏顶栏内置「更新中心」按钮（支持每 6 小时静默检查、Markdown 更新日志预览、可选 HTTPS 镜像前缀、SHA-256 完整性校验、失败自动回滚与热重启重载），同时支持离线整合包与干净 `main` 分支源码安装模式。
+   - 也可直接在 Antigravity 对话中让 AI 协助检查并升级（内置 `scripts/update.mjs` CLI 共享同一套校验与升级核心）。
+
 ---
 
 ## 🖥 跨平台与引擎兼容矩阵
@@ -173,7 +177,8 @@ npm test   # 可选：验证本地全套自测通过
 <details>
 <summary><b>4. 如何更新或卸载？</b></summary>
 
-- **更新**：使用源码安装的进入仓库根目录执行 `git pull`，若依赖有变化再进 `sidecars/studio` 跑一次 `npm ci`；使用离线包的直接下载新版压缩包覆盖解压即可。
+- **方式 A（推荐 · 在 Antigravity 内直接更新）**：点击 Sidecar Studio 侧边栏右上角**「检查更新」**按钮即可查看更新说明并一键升级重启；也可直接在 Antigravity 对话中发送*「帮我检查并更新 Sidecar Studio」*，或运行内置更新命令 `node ~/.gemini/config/plugins/antigravity-sidecar-studio/sidecars/studio/scripts/update.mjs --apply`。
+- **方式 B（手动更新）**：使用源码安装的进入仓库根目录执行 `git pull`，若依赖有变化再进 `sidecars/studio` 跑一次 `npm ci`；使用离线包的直接下载新版压缩包覆盖解压即可。
 - **卸载**：在 Antigravity 插件管理中禁用或卸载，并删除 `~/.gemini/config/plugins/antigravity-sidecar-studio` 文件夹。
 
 </details>

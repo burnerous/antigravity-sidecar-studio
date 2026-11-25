@@ -59,6 +59,14 @@
     contextTarget: null,
     tabContextTarget: null,
     openTabsFilterQuery: '',
+    bootId: '',
+    updateStatus: null,
+    updateModalOpen: false,
+    updatePollTimer: null,
+    updateReconnectTimer: null,
+    updateDirtyConfirmUntil: 0,
+    updateDirtyConfirmTimer: null,
+    updateCheckingNow: false,
   };
 
   let toastTimer = null;
@@ -183,6 +191,11 @@
     setTreeCollapsed(next);
   });
   global.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && state.updateModalOpen) {
+      e.preventDefault();
+      closeUpdateModal({ restoreFocus: true });
+      return;
+    }
     if (e.key === 'Escape' && state.stagedPopoverOpen) {
       e.preventDefault();
       closeStagedPopover({ restoreFocus: true });
@@ -2082,16 +2095,541 @@
     showToast('已刷新工作台');
   });
 
+  // ---------- Update Center ----------
+  const ACTIVE_UPDATE_STATES = new Set([
+    'checking',
+    'downloading',
+    'verifying',
+    'extracting',
+    'backing-up',
+    'applying',
+    'verifying-install',
+    'restarting',
+  ]);
+
+  function parseApiErrorMessage(err) {
+    const raw = String(err?.message || err || '请求失败');
+    try {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.error === 'string' && parsed.error) {
+        return parsed.error;
+      }
+    } catch {}
+    return raw;
+  }
+
+  function isUpdateJobBusy() {
+    return Boolean(
+      (state.updateStatus?.job && ACTIVE_UPDATE_STATES.has(state.updateStatus.job.state)) ||
+        state.updateReconnectTimer
+    );
+  }
+
+  function resetUpdateDirtyConfirm() {
+    state.updateDirtyConfirmUntil = 0;
+    if (state.updateDirtyConfirmTimer) {
+      clearTimeout(state.updateDirtyConfirmTimer);
+      state.updateDirtyConfirmTimer = null;
+    }
+  }
+
+  function renderMarkdownSafe(mdText) {
+    const raw = String(mdText || '').trim();
+    if (!raw) return '<p>暂无更新说明。</p>';
+    let html = '';
+    if (global.marked?.parse) {
+      html = global.marked.parse(raw, { gfm: true, breaks: true });
+    } else {
+      html = `<pre>${raw.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))}</pre>`;
+    }
+    if (global.DOMPurify?.sanitize) {
+      html = global.DOMPurify.sanitize(html, {
+        FORBID_TAGS: ['img', 'iframe', 'object', 'embed', 'form', 'script', 'style'],
+      });
+    }
+    return html;
+  }
+
+  function hardenRenderedLinks(container) {
+    if (!container) return;
+    for (const a of container.querySelectorAll('a')) {
+      const href = a.getAttribute('href') || '';
+      if (/^https?:\/\//i.test(href)) {
+        a.setAttribute('target', '_blank');
+        a.setAttribute('rel', 'noopener noreferrer');
+      } else {
+        a.removeAttribute('href');
+      }
+    }
+  }
+
+  function formatAssetSize(bytes) {
+    if (!Number.isFinite(bytes) || bytes <= 0) return '';
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KiB`;
+    return `${(bytes / (1024 * 1024)).toFixed(2)} MiB`;
+  }
+
+  function formatCheckTime(ts) {
+    if (!ts) return '';
+    try {
+      return new Date(ts).toLocaleString([], {
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+    } catch {
+      return '';
+    }
+  }
+
+  function buildManualUpdateCommand(status) {
+    const isWin = /win/i.test(navigator.platform || navigator.userAgent || '');
+    if (status?.installMode === 'git') {
+      return isWin
+        ? 'git -C "$env:USERPROFILE\\.gemini\\config\\plugins\\antigravity-sidecar-studio" pull --ff-only'
+        : 'git -C ~/.gemini/config/plugins/antigravity-sidecar-studio pull --ff-only';
+    }
+    return isWin
+      ? 'node "$env:USERPROFILE\\.gemini\\config\\plugins\\antigravity-sidecar-studio\\sidecars\\studio\\scripts\\update.mjs" --apply'
+      : 'node ~/.gemini/config/plugins/antigravity-sidecar-studio/sidecars/studio/scripts/update.mjs --apply';
+  }
+
+  function renderUpdateCenterUi() {
+    const st = state.updateStatus;
+    const btn = $('updateCenterBtn');
+    const dot = $('updateDot');
+    if (btn && dot) {
+      const hasUpdate = Boolean(st?.updateAvailable);
+      const hasUnseen = Boolean(st?.hasUnseenUpdate);
+      btn.classList.toggle('has-update', hasUpdate);
+      dot.classList.toggle('is-hidden', !hasUnseen);
+      btn.title = hasUpdate
+        ? `发现新版本 v${st.latest?.version}（点击查看并更新）`
+        : st?.currentVersion
+          ? `Sidecar Studio v${st.currentVersion} · 检查更新`
+          : '检查 Sidecar Studio 更新';
+    }
+
+    if (!st || !state.updateModalOpen) return;
+
+    $('updateCurrentBadge').textContent = `v${st.currentVersion || '—'}`;
+    $('updateInstallModeBadge').textContent = st.installMode === 'git' ? 'Git 源码版' : '离线安装包';
+
+    const statusPill = $('updateStatusPill');
+    statusPill.classList.remove('is-available', 'is-latest', 'is-error');
+    const versionRow = $('updateVersionRow');
+
+    if (state.updateCheckingNow) {
+      statusPill.textContent = '检查中...';
+      versionRow.textContent = `当前版本 v${st.currentVersion}`;
+    } else if (st.updateAvailable && st.latest) {
+      statusPill.textContent = '有新版本';
+      statusPill.classList.add('is-available');
+      versionRow.textContent = `v${st.currentVersion} → v${st.latest.version}`;
+    } else if (st.lastError && !st.latest) {
+      statusPill.textContent = '检查失败';
+      statusPill.classList.add('is-error');
+      versionRow.textContent = `当前版本 v${st.currentVersion}`;
+    } else if (st.latest) {
+      statusPill.textContent = '已是最新';
+      statusPill.classList.add('is-latest');
+      versionRow.textContent = `当前已是最新版 v${st.currentVersion}`;
+    } else {
+      statusPill.textContent = '未检查';
+      versionRow.textContent = `当前版本 v${st.currentVersion}`;
+    }
+
+    const metaEl = $('updateReleaseMeta');
+    const metaParts = [];
+    if (st.latest?.publishedAt) {
+      metaParts.push(`发布于 ${formatCheckTime(Date.parse(st.latest.publishedAt))}`);
+    }
+    if (st.latest?.assetSize) {
+      metaParts.push(`离线包 ${formatAssetSize(st.latest.assetSize)}`);
+    }
+    if (st.latest?.sha256) {
+      metaParts.push(`SHA-256 已就绪`);
+    } else if (st.latest) {
+      metaParts.push(`无 SHA-256 摘要`);
+    }
+    if (st.lastCheckAt) {
+      metaParts.push(`上次检查 ${formatCheckTime(st.lastCheckAt)}`);
+    }
+    metaEl.textContent = metaParts.join(' · ');
+    metaEl.classList.toggle('is-hidden', metaParts.length === 0);
+
+    const alertEl = $('updateAlertBox');
+    alertEl.classList.remove('is-warn', 'is-danger', 'is-hidden');
+    let alertText = '';
+    let alertKind = '';
+    if (st.job?.state === 'failed' && st.job.message) {
+      alertText = st.job.message;
+      alertKind = 'is-danger';
+    } else if (st.installMode === 'git' && st.gitInfo && !st.gitInfo.canAutoUpdate) {
+      alertText = st.gitInfo.blockReason;
+      alertKind = 'is-warn';
+    } else if (st.lastError && !state.updateCheckingNow) {
+      alertText = `最近检查异常：${st.lastError}`;
+      alertKind = 'is-danger';
+    }
+    if (alertText) {
+      alertEl.textContent = alertText;
+      if (alertKind) alertEl.classList.add(alertKind);
+    } else {
+      alertEl.classList.add('is-hidden');
+    }
+
+    const releaseLink = $('updateReleaseLink');
+    if (st.latest?.releaseUrl && /^https?:\/\//i.test(st.latest.releaseUrl)) {
+      releaseLink.href = st.latest.releaseUrl;
+      releaseLink.classList.remove('is-hidden');
+    } else {
+      releaseLink.classList.add('is-hidden');
+    }
+
+    const changelogEl = $('updateChangelogBody');
+    if (st.latest?.changelog) {
+      changelogEl.innerHTML = renderMarkdownSafe(st.latest.changelog);
+      hardenRenderedLinks(changelogEl);
+    } else if (st.latest) {
+      changelogEl.innerHTML = `<p>最新版本 <code>${st.latest.tagName || st.latest.version}</code> 已发布，暂无详细更新说明。</p>`;
+    } else {
+      changelogEl.textContent = '点击下方「检查更新」即可获取 GitHub Releases 最新版本信息。';
+    }
+
+    const job = st.job;
+    const progressBox = $('updateProgressBox');
+    const showProgress = Boolean(
+      job && (ACTIVE_UPDATE_STATES.has(job.state) || state.updateReconnectTimer)
+    );
+    progressBox.classList.toggle('is-hidden', !showProgress);
+    if (showProgress && job) {
+      $('updateProgressLabel').textContent = job.message || '正在更新...';
+      $('updateProgressDetail').textContent = `${Math.min(100, Math.max(0, job.progress || 0))}%`;
+      $('updateProgressFill').style.width = `${Math.min(100, Math.max(4, job.progress || 0))}%`;
+    }
+
+    const autoCheckInput = $('updateAutoCheckInput');
+    if (autoCheckInput) autoCheckInput.checked = st.autoCheck !== false;
+    const mirrorInput = $('updateMirrorInput');
+    if (mirrorInput && document.activeElement !== mirrorInput) {
+      mirrorInput.value = st.customMirror || '';
+    }
+
+    const busy = isUpdateJobBusy() || state.updateCheckingNow;
+    $('updateModalClose').disabled = isUpdateJobBusy();
+    $('updateCheckNowBtn').disabled = busy;
+    $('updateCheckNowBtn').textContent = state.updateCheckingNow ? '检查中...' : '检查更新';
+
+    const canDismiss = Boolean(
+      st.updateAvailable && st.latest?.version && st.dismissedVersion !== st.latest.version && !busy
+    );
+    $('updateDismissBtn').classList.toggle('is-hidden', !canDismiss);
+
+    const applyBtn = $('updateApplyBtn');
+    const canShowApply = Boolean(st.updateAvailable && st.latest);
+    applyBtn.classList.toggle('is-hidden', !canShowApply);
+    const gitBlocked = st.installMode === 'git' && st.gitInfo && !st.gitInfo.canAutoUpdate;
+    applyBtn.disabled = busy || gitBlocked;
+    if (isUpdateJobBusy()) {
+      applyBtn.textContent = '更新中...';
+    } else if (Date.now() < state.updateDirtyConfirmUntil) {
+      applyBtn.textContent = '仍有未保存修改，确认更新?';
+    } else {
+      applyBtn.textContent = st.installMode === 'git' ? '拉取并更新' : '立即更新';
+    }
+  }
+
+  async function refreshUpdateStatus() {
+    try {
+      const data = await getJson('/api/update/status');
+      if (data?.success) {
+        state.updateStatus = data;
+        renderUpdateCenterUi();
+      }
+      return data;
+    } catch {
+      return null;
+    }
+  }
+
+  function stopUpdatePolling() {
+    if (state.updatePollTimer) {
+      clearInterval(state.updatePollTimer);
+      state.updatePollTimer = null;
+    }
+    if (state.updateReconnectTimer) {
+      clearInterval(state.updateReconnectTimer);
+      state.updateReconnectTimer = null;
+    }
+  }
+
+  function startReconnectWatcher(targetVersion) {
+    if (state.updatePollTimer) {
+      clearInterval(state.updatePollTimer);
+      state.updatePollTimer = null;
+    }
+    if (state.updateReconnectTimer) return;
+
+    const startedAt = Date.now();
+    $('updateProgressLabel').textContent = '正在等待 Sidecar Studio 重启并重新连接...';
+    $('updateProgressDetail').textContent = '99%';
+    $('updateProgressFill').style.width = '99%';
+    $('updateReconnectRow').classList.add('is-hidden');
+
+    const tryReconnect = async () => {
+      try {
+        const res = await apiFetch('/api/health', { method: 'GET' });
+        if (res.ok) {
+          const health = await res.json();
+          const bootChanged = Boolean(state.bootId && health?.bootId && health.bootId !== state.bootId);
+          const versionMatched = Boolean(targetVersion && health?.version === targetVersion);
+          if (bootChanged || versionMatched) {
+            stopUpdatePolling();
+            $('updateProgressLabel').textContent = '重启完成，正在刷新工作台...';
+            $('updateProgressFill').style.width = '100%';
+            global.location.reload();
+            return;
+          }
+        }
+      } catch {}
+
+      if (Date.now() - startedAt > 25000) {
+        clearInterval(state.updateReconnectTimer);
+        state.updateReconnectTimer = null;
+        $('updateProgressLabel').textContent =
+          '更新已写入磁盘，等待自动重连超时。请点击「重新连接」或关闭后重新打开 Sidecar Studio 面板。';
+        $('updateReconnectRow').classList.remove('is-hidden');
+        renderUpdateCenterUi();
+      }
+    };
+
+    state.updateReconnectTimer = setInterval(tryReconnect, 600);
+    tryReconnect();
+  }
+
+  function startUpdateJobPolling(targetVersion) {
+    if (state.updatePollTimer) clearInterval(state.updatePollTimer);
+    $('updateReconnectRow').classList.add('is-hidden');
+
+    const pollOnce = async () => {
+      try {
+        const data = await getJson('/api/update/status');
+        if (!data?.success) return;
+        state.updateStatus = data;
+        renderUpdateCenterUi();
+        const job = data.job;
+        if (!job) return;
+        if (job.state === 'restarting' || job.state === 'completed') {
+          startReconnectWatcher(targetVersion || job.targetVersion);
+        } else if (job.state === 'failed') {
+          stopUpdatePolling();
+          renderUpdateCenterUi();
+        }
+      } catch {
+        // Server exited during restart
+        startReconnectWatcher(targetVersion);
+      }
+    };
+
+    state.updatePollTimer = setInterval(pollOnce, 500);
+    pollOnce();
+  }
+
+  async function openUpdateModal() {
+    closeStagedPopover();
+    state.updateModalOpen = true;
+    $('updateModal').classList.remove('is-hidden');
+    $('updateCenterBtn').setAttribute('aria-expanded', 'true');
+    renderUpdateCenterUi();
+    await refreshUpdateStatus();
+    if (!state.updateStatus?.lastCheckAt && !state.updateCheckingNow) {
+      runManualUpdateCheck({ force: false });
+    }
+  }
+
+  function closeUpdateModal({ restoreFocus = false } = {}) {
+    if (isUpdateJobBusy()) return;
+    resetUpdateDirtyConfirm();
+    state.updateModalOpen = false;
+    $('updateModal').classList.add('is-hidden');
+    const btn = $('updateCenterBtn');
+    btn.setAttribute('aria-expanded', 'false');
+    if (restoreFocus) btn.focus();
+  }
+
+  async function runManualUpdateCheck({ force = true } = {}) {
+    if (state.updateCheckingNow || isUpdateJobBusy()) return;
+    state.updateCheckingNow = true;
+    renderUpdateCenterUi();
+    try {
+      const data = await postJson('/api/update/check', { force, background: false });
+      if (data?.success) {
+        state.updateStatus = data;
+        if (data.updateAvailable && data.latest?.version) {
+          showToast(`发现新版本 v${data.latest.version}`);
+        } else {
+          showToast(`当前已是最新版本 v${data.currentVersion}`);
+        }
+      }
+    } catch (err) {
+      const msg = parseApiErrorMessage(err);
+      showToast(`检查更新失败: ${msg}`, 3200);
+      await refreshUpdateStatus();
+    } finally {
+      state.updateCheckingNow = false;
+      renderUpdateCenterUi();
+    }
+  }
+
+  $('updateCenterBtn').addEventListener('click', () => openUpdateModal());
+  $('updateModalClose').addEventListener('click', () => closeUpdateModal({ restoreFocus: true }));
+  $('updateModal').addEventListener('click', (e) => {
+    if (e.target === $('updateModal')) closeUpdateModal({ restoreFocus: true });
+  });
+  $('updateCheckNowBtn').addEventListener('click', () => runManualUpdateCheck({ force: true }));
+
+  $('updateApplyBtn').addEventListener('click', async () => {
+    if (isUpdateJobBusy() || !state.updateStatus?.updateAvailable) return;
+    if (state.activeController?.isDirty?.() && Date.now() >= state.updateDirtyConfirmUntil) {
+      state.updateDirtyConfirmUntil = Date.now() + 4000;
+      if (state.updateDirtyConfirmTimer) clearTimeout(state.updateDirtyConfirmTimer);
+      state.updateDirtyConfirmTimer = setTimeout(() => {
+        resetUpdateDirtyConfirm();
+        renderUpdateCenterUi();
+      }, 4100);
+      showToast('当前文档有未保存修改，请在 4 秒内再次点击确认更新', 3200);
+      renderUpdateCenterUi();
+      return;
+    }
+    resetUpdateDirtyConfirm();
+
+    const targetVersion = state.updateStatus.latest?.version || '';
+    const mirrorVal = $('updateMirrorInput').value.trim();
+    try {
+      const res = await postJson('/api/update/apply', {
+        targetVersion,
+        customMirror: mirrorVal,
+      });
+      if (res?.job) {
+        state.updateStatus = { ...state.updateStatus, job: res.job };
+        renderUpdateCenterUi();
+      }
+      startUpdateJobPolling(targetVersion);
+    } catch (err) {
+      showToast(`启动更新失败: ${parseApiErrorMessage(err)}`, 3400);
+      await refreshUpdateStatus();
+    }
+  });
+
+  $('updateDismissBtn').addEventListener('click', async () => {
+    const v = state.updateStatus?.latest?.version;
+    if (!v) return;
+    try {
+      const data = await postJson('/api/update/prefs', { dismissedVersion: v });
+      if (data?.success) {
+        state.updateStatus = data;
+        renderUpdateCenterUi();
+        showToast(`已忽略 v${v} 提醒（仍可在更新面板中手动更新）`);
+      }
+    } catch (err) {
+      showToast(parseApiErrorMessage(err));
+    }
+  });
+
+  $('updateAutoCheckInput').addEventListener('change', async (e) => {
+    try {
+      const data = await postJson('/api/update/prefs', { autoCheck: Boolean(e.target.checked) });
+      if (data?.success) {
+        state.updateStatus = data;
+        showToast(e.target.checked ? '已开启自动静默检查更新' : '已关闭自动检查更新');
+      }
+    } catch (err) {
+      showToast(parseApiErrorMessage(err));
+      renderUpdateCenterUi();
+    }
+  });
+
+  $('updateMirrorSaveBtn').addEventListener('click', async () => {
+    const val = $('updateMirrorInput').value.trim();
+    try {
+      const data = await postJson('/api/update/prefs', { customMirror: val });
+      if (data?.success) {
+        state.updateStatus = data;
+        renderUpdateCenterUi();
+        showToast(val ? '已保存自定义 HTTPS 镜像前缀' : '已清除自定义镜像，恢复官方直连');
+      }
+    } catch (err) {
+      showToast(parseApiErrorMessage(err), 3200);
+    }
+  });
+
+  $('updateCopyCmdBtn').addEventListener('click', () => {
+    copyText(buildManualUpdateCommand(state.updateStatus), '已复制终端更新命令');
+  });
+
+  $('updateCopyUrlBtn').addEventListener('click', () => {
+    const url =
+      state.updateStatus?.latest?.releaseUrl ||
+      `https://github.com/${state.updateStatus?.repo?.slug || 'burnerous/antigravity-sidecar-studio'}/releases/latest`;
+    copyText(url, '已复制 GitHub Release 链接');
+  });
+
+  $('updateAskAiBtn').addEventListener('click', async () => {
+    const v = state.updateStatus?.latest?.version;
+    const msg = v
+      ? `请帮我检查并更新 Sidecar Studio 插件到最新版本 v${v}。`
+      : '请帮我检查并更新 Sidecar Studio 插件到最新版本。';
+    closeUpdateModal();
+    await sendToAgent(msg);
+  });
+
+  $('updateReconnectBtn').addEventListener('click', async () => {
+    try {
+      const res = await apiFetch('/api/health', { method: 'GET' });
+      if (res.ok) {
+        global.location.reload();
+        return;
+      }
+    } catch {}
+    showToast('Sidecar Studio 尚未就绪，请稍候再试或重新打开面板');
+  });
+
   // ---------- Bootstrap ----------
   (async function bootstrap() {
     loadStagedComments();
     try {
       const health = await getJson('/api/health');
       state.capabilities = health.converters || {};
+      state.bootId = health.bootId || '';
       if (Number.isFinite(health?.generation)) {
         state.workspaceGen = Math.max(state.workspaceGen, health.generation);
       }
     } catch {}
+
+    const initialUpdateStatus = await refreshUpdateStatus();
+    if (initialUpdateStatus?.justUpdated && initialUpdateStatus.lastUpdate?.toVersion) {
+      showToast(`✅ Sidecar Studio 已更新至 v${initialUpdateStatus.lastUpdate.toVersion}`, 3800);
+      postJson('/api/update/ack-updated', {}).catch(() => {});
+    }
+    if (initialUpdateStatus?.autoCheck !== false) {
+      const stale =
+        !initialUpdateStatus?.lastCheckAt ||
+        Date.now() - initialUpdateStatus.lastCheckAt >= 6 * 60 * 60 * 1000;
+      if (stale) {
+        setTimeout(() => {
+          postJson('/api/update/check', { force: false, background: true })
+            .then((data) => {
+              if (data?.success && !data.backgroundError) {
+                state.updateStatus = data;
+                renderUpdateCenterUi();
+              }
+            })
+            .catch(() => {});
+        }, 1500);
+      }
+    }
 
     const params = new URLSearchParams(location.search);
     const initialFileParam = params.get('file') || params.get('uri') || params.get('path') || '';
@@ -2151,6 +2689,8 @@
     global.addEventListener('pagehide', () => {
       for (const id of state.pollTimers) clearInterval(id);
       state.pollTimers = [];
+      stopUpdatePolling();
+      resetUpdateDirtyConfirm();
       try {
         state.activeController?.destroy?.();
       } catch {}

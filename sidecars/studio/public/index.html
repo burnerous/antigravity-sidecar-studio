@@ -66,6 +66,10 @@
           <span id="stagedCommentsCount" class="ws-badge">0</span>
         </button>
         <select id="rootSelector" class="ws-select is-hidden" title="切换工作区根目录" aria-label="切换工作区根目录"></select>
+        <button id="updateCenterBtn" class="ws-icon-btn ws-update-btn" type="button" title="检查 Sidecar Studio 更新" aria-label="检查更新" aria-haspopup="dialog" aria-expanded="false">
+          <span class="ws-chip-icon" data-ws-icon="ui-update" data-size="14"></span>
+          <span id="updateDot" class="ws-update-dot is-hidden" aria-hidden="true"></span>
+        </button>
         <button id="globalRefreshBtn" class="ws-icon-btn" type="button" title="手动刷新当前视图" aria-label="手动刷新">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
             <path d="M13.5 8a5.5 5.5 0 1 1-1.35-3.6"/>
@@ -272,6 +276,86 @@
         <div class="ws-staged-footer-actions">
           <button id="stagedCommentsCopyBtn" class="ws-btn-secondary" type="button"><span data-ws-icon="ui-copy" data-size="13"></span><span>复制全部</span></button>
           <button id="stagedCommentsSendBtn" class="ws-btn-primary" type="button"><span data-ws-icon="ui-send" data-size="13"></span><span id="stagedCommentsSendText">合并发给 AI</span></button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Update Center Modal -->
+    <div id="updateModal" class="ws-modal-backdrop is-hidden" role="dialog" aria-modal="true" aria-labelledby="updateModalTitle">
+      <div class="ws-modal ws-update-modal">
+        <div class="ws-modal-header">
+          <h4 id="updateModalTitle">
+            <span data-ws-icon="ui-update" data-size="15"></span>
+            <span>Sidecar Studio 更新</span>
+            <span id="updateCurrentBadge" class="ws-update-ver-pill">v—</span>
+          </h4>
+          <button id="updateModalClose" class="ws-icon-btn ws-btn-sm" type="button" aria-label="关闭">&times;</button>
+        </div>
+
+        <div class="ws-modal-body ws-update-body">
+          <div id="updateSummaryCard" class="ws-update-summary">
+            <div class="ws-update-summary-top">
+              <div id="updateVersionRow" class="ws-update-version-row">正在获取版本状态...</div>
+              <div class="ws-update-badges">
+                <span id="updateInstallModeBadge" class="ws-update-mode-pill">离线包</span>
+                <span id="updateStatusPill" class="ws-update-status-pill">未检查</span>
+              </div>
+            </div>
+            <div id="updateReleaseMeta" class="ws-update-meta is-hidden"></div>
+          </div>
+
+          <div id="updateAlertBox" class="ws-update-alert is-hidden" role="alert"></div>
+
+          <div id="updateChangelogWrap" class="ws-update-changelog-wrap">
+            <div class="ws-update-section-head">
+              <span>更新说明</span>
+              <a id="updateReleaseLink" class="ws-update-ext-link is-hidden" href="#" target="_blank" rel="noopener noreferrer">在 GitHub 查看</a>
+            </div>
+            <div id="updateChangelogBody" class="ws-update-changelog">点击「检查更新」查看最新版本发布说明。</div>
+          </div>
+
+          <div id="updateProgressBox" class="ws-update-progress is-hidden">
+            <div class="ws-update-progress-head">
+              <span id="updateProgressLabel">准备中...</span>
+              <span id="updateProgressDetail">0%</span>
+            </div>
+            <div class="ws-update-progress-track">
+              <div id="updateProgressFill" class="ws-update-progress-fill" style="width:0%"></div>
+            </div>
+            <div class="ws-update-progress-actions is-hidden" id="updateReconnectRow">
+              <button id="updateReconnectBtn" class="ws-btn-ghost" type="button">重新连接 Sidecar Studio</button>
+            </div>
+          </div>
+
+          <details id="updateAdvancedDetails" class="ws-update-advanced">
+            <summary>高级选项与手动更新</summary>
+            <div class="ws-update-advanced-body">
+              <label class="ws-update-check-row">
+                <input id="updateAutoCheckInput" type="checkbox" checked>
+                <span>打开工作台时自动静默检查更新（每 6 小时）</span>
+              </label>
+
+              <div class="ws-update-mirror-row">
+                <input id="updateMirrorInput" type="url" placeholder="可选 HTTPS 镜像前缀，如 https://mirror.example.com/" autocomplete="off" spellcheck="false" aria-label="可选 HTTPS 下载镜像前缀">
+                <button id="updateMirrorSaveBtn" class="ws-btn-ghost" type="button">保存镜像</button>
+              </div>
+              <div class="ws-update-mirror-hint">仅当 GitHub 下载受限时使用；启用镜像时必须通过官方 SHA-256 校验。</div>
+
+              <div class="ws-update-manual-actions">
+                <button id="updateCopyCmdBtn" class="ws-btn-ghost" type="button"><span data-ws-icon="ui-copy" data-size="12"></span><span>复制更新命令</span></button>
+                <button id="updateCopyUrlBtn" class="ws-btn-ghost" type="button"><span data-ws-icon="ui-external" data-size="12"></span><span>复制 Release 链接</span></button>
+                <button id="updateAskAiBtn" class="ws-btn-ghost" type="button"><span data-ws-icon="ui-send" data-size="12"></span><span>让 AI 协助更新</span></button>
+              </div>
+            </div>
+          </details>
+        </div>
+
+        <div class="ws-modal-footer ws-update-footer">
+          <button id="updateDismissBtn" class="ws-btn-ghost is-hidden" type="button">忽略此版本</button>
+          <div class="ws-update-footer-right">
+            <button id="updateCheckNowBtn" class="ws-btn-secondary" type="button">检查更新</button>
+            <button id="updateApplyBtn" class="ws-btn-primary is-hidden" type="button">立即更新</button>
+          </div>
         </div>
       </div>
     </div>

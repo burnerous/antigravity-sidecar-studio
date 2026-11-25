@@ -1,13 +1,16 @@
 import assert from 'node:assert/strict';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import {
   closeSync,
+  cpSync,
   existsSync,
   linkSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
   openSync,
+  readdirSync,
   readFileSync,
   readSync,
   realpathSync,
@@ -15,15 +18,17 @@ import {
   rmSync,
   statSync,
   unlinkSync,
+  unwatchFile,
   utimesSync,
   watchFile,
   writeFileSync,
 } from 'node:fs';
-import { request as httpRequest } from 'node:http';
+import { createServer as createHttpServer, request as httpRequest } from 'node:http';
 import { createRequire } from 'node:module';
 import { homedir, tmpdir } from 'node:os';
 import { basename, dirname, extname, join, relative, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { deflateRawSync } from 'node:zlib';
 
 import { OfficeConverter } from './lib/office-converter.mjs';
 import {
@@ -40,7 +45,14 @@ import {
   readTranscriptSteps,
   resolveConversationId,
 } from './lib/transcript.mjs';
+import {
+  compareSemver,
+  computeCrc32,
+  extractZipSafely,
+  PluginUpdater,
+} from './lib/updater.mjs';
 import { listDirectory, searchWorkspace, WorkspaceWatcher } from './lib/workspace.mjs';
+import { runUpdateCli } from './scripts/update.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -158,6 +170,11 @@ export function createStudioServer({
   appDataDir,
   cacheDir,
   studioDir = __dirname,
+  pluginRoot,
+  dataDir,
+  updaterOptions,
+  prepareForSelfUpdate,
+  onRestart,
 } = {}) {
   const app = new SidecarApp();
   const security = new SecurityManager();
@@ -166,6 +183,23 @@ export function createStudioServer({
     scriptPath: join(studioDir, 'scripts', 'office-to-pdf.ps1'),
     cacheDir,
     timeoutMs: 25000,
+  });
+  const bootId = randomBytes(8).toString('hex');
+  const resolvedPluginRoot = resolve(pluginRoot || join(studioDir, '..', '..'));
+  const resolvedDataDir = resolve(
+    dataDir || (cacheDir ? join(dirname(cacheDir), 'updater-data') : join(tmpdir(), 'sidecar-studio-data'))
+  );
+  const updater = new PluginUpdater({
+    pluginRoot: resolvedPluginRoot,
+    studioDir,
+    dataDir: resolvedDataDir,
+    bootId,
+    prepareForSelfUpdate: async () => {
+      watcher.closeAll();
+      if (prepareForSelfUpdate) await prepareForSelfUpdate();
+    },
+    onRestart,
+    ...(updaterOptions || {}),
   });
 
   const staticInfo = registerAllStaticAssets(app, ResponseClass, studioDir);
@@ -236,9 +270,13 @@ export function createStudioServer({
     '/api/health',
     () => {
       const caps = converter.getCapabilities();
+      const upd = updater.getStatus();
       return jsonResponse(ResponseClass, {
         success: true,
         status: 'ok',
+        version: upd.currentVersion,
+        installMode: upd.installMode,
+        bootId,
         appDataDir,
         converters: caps,
         roots: security.getRoots(),
@@ -979,11 +1017,76 @@ export function createStudioServer({
     }
   });
 
+  // GET /api/update/status
+  app.api(
+    '/api/update/status',
+    () => {
+      try {
+        return jsonResponse(ResponseClass, { success: true, ...updater.getStatus() });
+      } catch (err) {
+        return handleApiError(ResponseClass, err);
+      }
+    },
+    'GET'
+  );
+
+  // POST /api/update/check
+  app.api('/api/update/check', async (data) => {
+    try {
+      const status = await updater.checkForUpdates({
+        force: Boolean(data?.force),
+        background: Boolean(data?.background),
+        customMirror: data?.customMirror,
+      });
+      return jsonResponse(ResponseClass, { success: true, ...status });
+    } catch (err) {
+      return handleApiError(ResponseClass, err);
+    }
+  });
+
+  // POST /api/update/apply
+  app.api('/api/update/apply', async (data) => {
+    try {
+      const res = await updater.startUpdate({
+        targetVersion: typeof data?.targetVersion === 'string' ? data.targetVersion : undefined,
+        customMirror: data?.customMirror,
+      });
+      return jsonResponse(ResponseClass, { success: true, ...res }, 202);
+    } catch (err) {
+      return handleApiError(ResponseClass, err);
+    }
+  });
+
+  // POST /api/update/prefs
+  app.api('/api/update/prefs', (data) => {
+    try {
+      const status = updater.updatePreferences({
+        autoCheck: typeof data?.autoCheck === 'boolean' ? data.autoCheck : undefined,
+        dismissedVersion:
+          typeof data?.dismissedVersion === 'string' ? data.dismissedVersion : undefined,
+        customMirror: data?.customMirror !== undefined ? data.customMirror : undefined,
+      });
+      return jsonResponse(ResponseClass, { success: true, ...status });
+    } catch (err) {
+      return handleApiError(ResponseClass, err);
+    }
+  });
+
+  // POST /api/update/ack-updated
+  app.api('/api/update/ack-updated', () => {
+    try {
+      return jsonResponse(ResponseClass, { success: true, ...updater.acknowledgeUpdated() });
+    } catch (err) {
+      return handleApiError(ResponseClass, err);
+    }
+  });
+
   return {
     app,
     security,
     watcher,
     converter,
+    updater,
     staticInfo,
     close: async () => {
       watcher.closeAll();
@@ -1712,12 +1815,514 @@ async function runSelfTests() {
     assert.equal(deniedInOverlappingRoot.status, 403, 'a workspace root cannot grant access to another conversation');
     assert.equal(existsSync(join(otherConvDir, 'other_annotated.png')), false);
 
+    assert.equal(typeof healthJson.version, 'string', 'health exposes version');
+    assert.ok(healthJson.bootId, 'health exposes bootId');
+
+    await runUpdaterSelfTests({ SidecarApp, ResponseClass });
+
     console.log(
       `[antigravity-sidecar-studio --test] ALL PASSED (staticRoutes=${studio.staticInfo.count}, xlsx=${XLSX.version}, converters=${JSON.stringify(healthJson.converters)})`
     );
   } finally {
     await studio.close();
     rmSync(tmpRoot, { recursive: true, force: true });
+  }
+}
+
+function buildTestZipBuffer(entries) {
+  const localParts = [];
+  const cdParts = [];
+  let offset = 0;
+
+  for (const entry of entries) {
+    const nameBuf = Buffer.from(entry.name, 'utf8');
+    const rawBuf = Buffer.isBuffer(entry.data)
+      ? entry.data
+      : Buffer.from(String(entry.data || ''), 'utf8');
+    const isDir = entry.name.endsWith('/');
+    const method = !isDir && entry.deflate ? 8 : 0;
+    const compBuf = isDir
+      ? Buffer.alloc(0)
+      : method === 8
+        ? deflateRawSync(rawBuf)
+        : rawBuf;
+    const crc = isDir ? 0 : computeCrc32(rawBuf);
+
+    const lfh = Buffer.alloc(30);
+    lfh.writeUInt32LE(0x04034b50, 0);
+    lfh.writeUInt16LE(20, 4);
+    lfh.writeUInt16LE(0x0800, 6);
+    lfh.writeUInt16LE(method, 8);
+    lfh.writeUInt32LE(crc, 14);
+    lfh.writeUInt32LE(compBuf.length, 18);
+    lfh.writeUInt32LE(isDir ? 0 : rawBuf.length, 22);
+    lfh.writeUInt16LE(nameBuf.length, 26);
+
+    localParts.push(lfh, nameBuf, compBuf);
+
+    const cdh = Buffer.alloc(46);
+    cdh.writeUInt32LE(0x02014b50, 0);
+    cdh.writeUInt16LE(0x031e, 4);
+    cdh.writeUInt16LE(20, 6);
+    cdh.writeUInt16LE(0x0800, 8);
+    cdh.writeUInt16LE(method, 10);
+    cdh.writeUInt32LE(crc, 16);
+    cdh.writeUInt32LE(compBuf.length, 20);
+    cdh.writeUInt32LE(isDir ? 0 : rawBuf.length, 24);
+    cdh.writeUInt16LE(nameBuf.length, 28);
+    cdh.writeUInt32LE(offset, 42);
+
+    cdParts.push(cdh, nameBuf);
+    offset += lfh.length + nameBuf.length + compBuf.length;
+  }
+
+  const cdBuf = Buffer.concat(cdParts);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0);
+  eocd.writeUInt16LE(entries.length, 8);
+  eocd.writeUInt16LE(entries.length, 10);
+  eocd.writeUInt32LE(cdBuf.length, 12);
+  eocd.writeUInt32LE(offset, 16);
+
+  return Buffer.concat([...localParts, cdBuf, eocd]);
+}
+
+function makeFakePluginEntries({ version, serverBody, readmeBody, lockBody, deflate = true }) {
+  const prefix = 'antigravity-sidecar-studio/';
+  return [
+    { name: prefix, data: '' },
+    {
+      name: `${prefix}plugin.json`,
+      data: JSON.stringify(
+        {
+          name: 'antigravity-sidecar-studio',
+          version,
+          repository: 'https://github.com/burnerous/antigravity-sidecar-studio',
+        },
+        null,
+        2
+      ),
+      deflate,
+    },
+    { name: `${prefix}LICENSE`, data: 'MIT\n', deflate },
+    { name: `${prefix}README.md`, data: readmeBody || `# v${version}\n`, deflate },
+    { name: `${prefix}assets/logo.svg`, data: '<svg></svg>', deflate },
+    { name: `${prefix}rules/AGENTS.md`, data: '# Rules\n', deflate },
+    { name: `${prefix}skills/sidecar-studio/SKILL.md`, data: '# Skill\n', deflate },
+    { name: `${prefix}sidecars/studio/sidecar.json`, data: '{"has_web_ui":true}', deflate },
+    {
+      name: `${prefix}sidecars/studio/package.json`,
+      data: JSON.stringify({ name: 'antigravity-sidecar-studio', version }),
+      deflate,
+    },
+    {
+      name: `${prefix}sidecars/studio/package-lock.json`,
+      data: lockBody || '{"lockfileVersion":3}',
+      deflate,
+    },
+    { name: `${prefix}sidecars/studio/lib/helper.mjs`, data: `export const v = '${version}';\n`, deflate },
+    { name: `${prefix}sidecars/studio/public/index.html`, data: '<html></html>', deflate },
+    { name: `${prefix}sidecars/studio/public/app.js`, data: `console.log('${version}');\n`, deflate },
+    { name: `${prefix}sidecars/studio/scripts/update.mjs`, data: '// cli\n', deflate },
+    {
+      name: `${prefix}sidecars/studio/node_modules/xlsx/dist/xlsx.full.min.js`,
+      data: '// xlsx mock\n',
+      deflate,
+    },
+    {
+      name: `${prefix}sidecars/studio/server.mjs`,
+      data: serverBody || `export const version = '${version}';\n`,
+      deflate,
+    },
+  ];
+}
+
+function seedPluginDir(rootDir, opts) {
+  for (const e of makeFakePluginEntries(opts)) {
+    const rel = e.name.replace(/^antigravity-sidecar-studio\//, '');
+    if (!rel) continue;
+    const target = join(rootDir, rel);
+    if (rel.endsWith('/')) {
+      mkdirSync(target, { recursive: true });
+    } else {
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, e.data, 'utf8');
+    }
+  }
+}
+
+async function runUpdaterSelfTests({ SidecarApp, ResponseClass }) {
+  assert.equal(compareSemver('1.3.0', '1.3.0'), 0);
+  assert.ok(compareSemver('v1.4.0', '1.3.9') > 0);
+  assert.ok(compareSemver('2.0.0-beta.1', '2.0.0') < 0);
+  assert.ok(compareSemver('2.0.0-beta.2', '2.0.0-beta.10') < 0);
+  assert.ok(compareSemver('2.0.0-alpha', '2.0.0-1') > 0);
+
+  const tmpUpdRoot = mkdtempSync(join(tmpdir(), 'ws-updater-test-'));
+  let mockMode = 'api-ok';
+  let apiCalls = 0;
+  let currentZipBuf = Buffer.alloc(0);
+  let currentSha256 = '';
+  let currentSumsSha256 = '';
+  let currentBodySha256 = '';
+  let currentDigestSha256 = '';
+
+  const mockServer = createHttpServer((req, res) => {
+    const url = new URL(req.url, 'http://127.0.0.1');
+    if (url.pathname === '/repos/burnerous/antigravity-sidecar-studio/releases/latest') {
+      apiCalls += 1;
+      if (mockMode === 'rate-limit-403') {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ message: 'API rate limit exceeded' }));
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          tag_name: 'v9.9.9',
+          name: 'Sidecar Studio v9.9.9',
+          published_at: '2026-11-25T12:00:00Z',
+          html_url: `http://127.0.0.1:${mockPort}/burnerous/antigravity-sidecar-studio/releases/tag/v9.9.9`,
+          body:
+            `## Sidecar Studio v9.9.9\n\n### 📝 更新内容\n\n- 新增应用内自动更新\n\n---\n` +
+            (currentBodySha256 ? `- **SHA-256**：\`${currentBodySha256}\`\n` : ''),
+          assets: [
+            {
+              name: 'antigravity-sidecar-studio-v9.9.9-offline.zip',
+              size: currentZipBuf.length,
+              digest: currentDigestSha256 ? `sha256:${currentDigestSha256}` : '',
+              browser_download_url: `http://127.0.0.1:${mockPort}/burnerous/antigravity-sidecar-studio/releases/download/v9.9.9/antigravity-sidecar-studio-v9.9.9-offline.zip`,
+            },
+          ],
+        })
+      );
+      return;
+    }
+    if (url.pathname === '/burnerous/antigravity-sidecar-studio/releases/latest') {
+      res.writeHead(302, {
+        Location: `http://127.0.0.1:${mockPort}/burnerous/antigravity-sidecar-studio/releases/tag/v9.9.9`,
+      });
+      res.end();
+      return;
+    }
+    if (
+      url.pathname ===
+      '/burnerous/antigravity-sidecar-studio/releases/download/v9.9.9/antigravity-sidecar-studio-v9.9.9-offline.zip'
+    ) {
+      res.writeHead(200, {
+        'Content-Type': 'application/zip',
+        'Content-Length': String(currentZipBuf.length),
+      });
+      res.end(currentZipBuf);
+      return;
+    }
+    if (
+      url.pathname ===
+      '/burnerous/antigravity-sidecar-studio/releases/download/v9.9.9/SHA256SUMS.txt'
+    ) {
+      res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end(`${currentSumsSha256}  antigravity-sidecar-studio-v9.9.9-offline.zip\n`);
+      return;
+    }
+    res.writeHead(404);
+    res.end('Not found');
+  });
+
+  await new Promise((r) => mockServer.listen(0, '127.0.0.1', r));
+  const mockPort = mockServer.address().port;
+  const mockBase = `http://127.0.0.1:${mockPort}`;
+
+  try {
+    // 1. Zip-Slip protection check
+    const slipZip = join(tmpUpdRoot, 'slip.zip');
+    writeFileSync(
+      slipZip,
+      buildTestZipBuffer([{ name: 'antigravity-sidecar-studio/../../evil.txt', data: 'bad' }])
+    );
+    assert.throws(
+      () => extractZipSafely(slipZip, join(tmpUpdRoot, 'slip-out')),
+      /不安全的 ZIP 路径/
+    );
+    assert.equal(existsSync(join(tmpUpdRoot, 'evil.txt')), false);
+
+    // 2. Prepare good offline-zip plugin copy & release archive
+    const pluginCopy = join(tmpUpdRoot, 'plugin-offline');
+    const sharedLock = '{"lockfileVersion":3,"packages":{"xlsx":"0.20.3"}}';
+    seedPluginDir(pluginCopy, { version: '1.3.0', lockBody: sharedLock });
+    const nmSentinel = join(pluginCopy, 'sidecars', 'studio', 'node_modules', '.keep-sentinel');
+    writeFileSync(nmSentinel, 'keep-me', 'utf8');
+
+    currentZipBuf = buildTestZipBuffer(
+      makeFakePluginEntries({
+        version: '9.9.9',
+        lockBody: sharedLock,
+        readmeBody: '# Updated v9.9.9\n',
+        deflate: true,
+      })
+    );
+    currentSha256 = createHash('sha256').update(currentZipBuf).digest('hex');
+    currentDigestSha256 = currentSha256;
+    currentBodySha256 = currentSha256;
+    currentSumsSha256 = currentSha256;
+
+    const updaterDataDir = join(tmpUpdRoot, 'upd-data');
+    let preparedCalled = 0;
+    let restartedCalled = 0;
+    let workDirCleanedBeforeRestart = false;
+    const updStudio = createStudioServer({
+      SidecarApp,
+      Response: ResponseClass,
+      appDataDir: join(tmpUpdRoot, 'appdata'),
+      cacheDir: join(tmpUpdRoot, 'cache'),
+      studioDir: join(pluginCopy, 'sidecars', 'studio'),
+      pluginRoot: pluginCopy,
+      dataDir: updaterDataDir,
+      prepareForSelfUpdate: () => {
+        preparedCalled += 1;
+      },
+      onRestart: () => {
+        restartedCalled += 1;
+        const wr = join(updaterDataDir, 'updater-work');
+        workDirCleanedBeforeRestart = !existsSync(wr) || readdirSync(wr).length === 0;
+      },
+      updaterOptions: {
+        apiBaseUrl: mockBase,
+        webBaseUrl: mockBase,
+        allowedDownloadHosts: ['127.0.0.1', 'localhost'],
+      },
+    });
+    const updHttp = await updStudio.app.run();
+    const updBase = `http://127.0.0.1:${updHttp.address().port}`;
+    const updToken = process.env.ANTIGRAVITY_SIDECAR_UI_TOKEN;
+    const updPost = (path, body) =>
+      fetch(`${updBase}${path}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(updToken ? { 'X-Sidecar-Token': updToken } : {}),
+        },
+        body: JSON.stringify(body),
+      });
+
+    try {
+      // Check + cache behavior
+      const st0 = await (await fetch(`${updBase}/api/update/status`)).json();
+      assert.equal(st0.currentVersion, '1.3.0');
+      assert.equal(st0.installMode, 'offline-zip');
+      assert.equal(st0.updateAvailable, false);
+
+      const chk1 = await (await updPost('/api/update/check', { force: true })).json();
+      assert.equal(chk1.updateAvailable, true);
+      assert.equal(chk1.latest.version, '9.9.9');
+      assert.match(chk1.latest.changelog, /新增应用内自动更新/);
+      assert.equal(chk1.latest.sha256, currentSha256);
+      assert.equal(apiCalls, 1);
+
+      // Cached check should not hit server again
+      await updPost('/api/update/check', { force: false });
+      assert.equal(apiCalls, 1);
+
+      // Force check under 403 rate limit falls back to redirect + SHA256SUMS.txt
+      mockMode = 'rate-limit-403';
+      const chkFallback = await (await updPost('/api/update/check', { force: true })).json();
+      assert.equal(chkFallback.latest.source, 'redirect-fallback');
+      assert.equal(chkFallback.latest.sha256, currentSha256);
+      mockMode = 'api-ok';
+
+      // Custom mirror without SHA-256 must be refused
+      currentDigestSha256 = '';
+      currentBodySha256 = '';
+      currentSumsSha256 = '';
+      const noShaUpdater = new PluginUpdater({
+        pluginRoot: pluginCopy,
+        studioDir: join(pluginCopy, 'sidecars', 'studio'),
+        dataDir: join(tmpUpdRoot, 'nosha-data'),
+        apiBaseUrl: mockBase,
+        webBaseUrl: mockBase,
+        allowedDownloadHosts: ['127.0.0.1', 'localhost'],
+      });
+      await noShaUpdater.checkForUpdates({ force: true });
+      await assert.rejects(
+        () => noShaUpdater.startUpdate({ customMirror: 'https://mirror.example.com/' }),
+        /必须具备官方 SHA-256/
+      );
+      currentDigestSha256 = currentSha256;
+      currentBodySha256 = currentSha256;
+      currentSumsSha256 = currentSha256;
+
+      // SHA-256 mismatch rejects update & leaves plugin untouched
+      const badUpdater = new PluginUpdater({
+        pluginRoot: pluginCopy,
+        studioDir: join(pluginCopy, 'sidecars', 'studio'),
+        dataDir: join(tmpUpdRoot, 'badsha-data'),
+        apiBaseUrl: mockBase,
+        webBaseUrl: mockBase,
+        allowedDownloadHosts: ['127.0.0.1', 'localhost'],
+      });
+      await badUpdater.checkForUpdates({ force: true });
+      currentZipBuf = buildTestZipBuffer(
+        makeFakePluginEntries({ version: '9.9.9', lockBody: sharedLock, readmeBody: 'tampered' })
+      );
+      await badUpdater.startUpdate({ targetVersion: '9.9.9' });
+      const badJob = await badUpdater.waitForJob();
+      assert.equal(badJob.state, 'failed');
+      assert.match(badJob.error, /SHA-256 校验失败/);
+      assert.equal(JSON.parse(readFileSync(join(pluginCopy, 'plugin.json'), 'utf8')).version, '1.3.0');
+
+      // Rollback test: broken server.mjs syntax inside valid-SHA zip must roll back cleanly
+      currentZipBuf = buildTestZipBuffer(
+        makeFakePluginEntries({
+          version: '9.9.9',
+          lockBody: sharedLock,
+          serverBody: 'this is not valid javascript syntax ((((',
+        })
+      );
+      currentSha256 = createHash('sha256').update(currentZipBuf).digest('hex');
+      currentDigestSha256 = currentSha256;
+      currentBodySha256 = currentSha256;
+      currentSumsSha256 = currentSha256;
+
+      await updPost('/api/update/check', { force: true });
+      const rbStart = await updPost('/api/update/apply', { targetVersion: '9.9.9' });
+      assert.equal(rbStart.status, 202);
+      const rbJob = await updStudio.updater.waitForJob();
+      assert.equal(rbJob.state, 'failed');
+      assert.equal(rbJob.rolledBack, true);
+      assert.equal(JSON.parse(readFileSync(join(pluginCopy, 'plugin.json'), 'utf8')).version, '1.3.0');
+
+      // Successful offline-zip apply + skip unchanged node_modules + lastUpdate persistence
+      currentZipBuf = buildTestZipBuffer(
+        makeFakePluginEntries({
+          version: '9.9.9',
+          lockBody: sharedLock,
+          readmeBody: '# Updated v9.9.9\n',
+        })
+      );
+      currentSha256 = createHash('sha256').update(currentZipBuf).digest('hex');
+      currentDigestSha256 = currentSha256;
+      currentBodySha256 = currentSha256;
+      currentSumsSha256 = currentSha256;
+
+      await updPost('/api/update/check', { force: true });
+      const applyRes = await updPost('/api/update/apply', { targetVersion: '9.9.9' });
+      assert.equal(applyRes.status, 202);
+      const okJob = await updStudio.updater.waitForJob();
+      assert.equal(okJob.state, 'completed');
+      assert.equal(JSON.parse(readFileSync(join(pluginCopy, 'plugin.json'), 'utf8')).version, '9.9.9');
+      assert.equal(readFileSync(join(pluginCopy, 'README.md'), 'utf8'), '# Updated v9.9.9\n');
+      assert.equal(readFileSync(nmSentinel, 'utf8'), 'keep-me', 'unchanged node_modules should be skipped');
+      assert.ok(preparedCalled >= 1);
+      assert.equal(restartedCalled, 1);
+      assert.equal(workDirCleanedBeforeRestart, true, 'workDir must be cleaned up before onRestart');
+
+      const postRestartUpdater = new PluginUpdater({
+        pluginRoot: pluginCopy,
+        studioDir: join(pluginCopy, 'sidecars', 'studio'),
+        dataDir: updaterDataDir,
+      });
+      assert.equal(postRestartUpdater.getStatus().justUpdated, true);
+      postRestartUpdater.acknowledgeUpdated();
+      assert.equal(postRestartUpdater.getStatus().justUpdated, false);
+    } finally {
+      await updStudio.close();
+    }
+
+    // 3. CLI tests (in-process JSON check & --help subprocess)
+    const cliCheckPlugin = join(tmpUpdRoot, 'cli-plugin');
+    seedPluginDir(cliCheckPlugin, { version: '1.3.0', lockBody: sharedLock });
+    let cliOut = '';
+    const cliCode = await runUpdateCli(['--check', '--force', '--json'], {
+      pluginRoot: cliCheckPlugin,
+      studioDir: join(cliCheckPlugin, 'sidecars', 'studio'),
+      dataDir: join(tmpUpdRoot, 'cli-data'),
+      apiBaseUrl: mockBase,
+      webBaseUrl: mockBase,
+      allowedDownloadHosts: ['127.0.0.1', 'localhost'],
+      stdout: (s) => {
+        cliOut += s;
+      },
+    });
+    assert.equal(cliCode, 0);
+    const cliParsed = JSON.parse(cliOut);
+    assert.equal(cliParsed.ok, true);
+    assert.equal(cliParsed.status.updateAvailable, true);
+    assert.equal(cliParsed.status.latest.version, '9.9.9');
+
+    const helpRes = spawnSync(
+      process.execPath,
+      [join(__dirname, 'scripts', 'update.mjs'), '--help'],
+      { encoding: 'utf8', windowsHide: true }
+    );
+    assert.equal(helpRes.status, 0);
+    assert.match(helpRes.stdout, /--apply/);
+
+    // 4. Git install mode tests (bare origin + dirty/branch/clean main)
+    const bareOrigin = join(tmpUpdRoot, 'origin.git');
+    const seedWork = join(tmpUpdRoot, 'git-seed');
+    const gitClone = join(tmpUpdRoot, 'git-clone');
+    execFileSync('git', ['init', '--bare', bareOrigin], { windowsHide: true });
+    mkdirSync(seedWork, { recursive: true });
+    execFileSync('git', ['init', '-b', 'main'], { cwd: seedWork, windowsHide: true });
+    execFileSync('git', ['config', 'user.name', 'Test'], { cwd: seedWork, windowsHide: true });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], {
+      cwd: seedWork,
+      windowsHide: true,
+    });
+    seedPluginDir(seedWork, { version: '1.3.0', lockBody: sharedLock });
+    execFileSync('git', ['add', '-A'], { cwd: seedWork, windowsHide: true });
+    execFileSync('git', ['commit', '-m', 'init v1.3.0'], { cwd: seedWork, windowsHide: true });
+    execFileSync('git', ['remote', 'add', 'origin', bareOrigin], { cwd: seedWork, windowsHide: true });
+    execFileSync('git', ['push', '-u', 'origin', 'main'], { cwd: seedWork, windowsHide: true });
+
+    execFileSync('git', ['clone', bareOrigin, gitClone], { windowsHide: true });
+    execFileSync('git', ['config', 'user.name', 'Test'], { cwd: gitClone, windowsHide: true });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], {
+      cwd: gitClone,
+      windowsHide: true,
+    });
+
+    // Advance origin to v9.9.9
+    seedPluginDir(seedWork, { version: '9.9.9', lockBody: sharedLock, readmeBody: '# Git v9.9.9\n' });
+    execFileSync('git', ['add', '-A'], { cwd: seedWork, windowsHide: true });
+    execFileSync('git', ['commit', '-m', 'release v9.9.9'], { cwd: seedWork, windowsHide: true });
+    execFileSync('git', ['push', 'origin', 'main'], { cwd: seedWork, windowsHide: true });
+
+    let gitRestarted = 0;
+    const gitUpdater = new PluginUpdater({
+      pluginRoot: gitClone,
+      studioDir: join(gitClone, 'sidecars', 'studio'),
+      dataDir: join(tmpUpdRoot, 'git-data'),
+      apiBaseUrl: mockBase,
+      webBaseUrl: mockBase,
+      allowedDownloadHosts: ['127.0.0.1', 'localhost'],
+      onRestart: () => {
+        gitRestarted += 1;
+      },
+    });
+    await gitUpdater.checkForUpdates({ force: true });
+
+    // Dirty tree must be refused (409) and local file preserved
+    const dirtyFile = join(gitClone, 'local-note.txt');
+    writeFileSync(dirtyFile, 'keep local', 'utf8');
+    await assert.rejects(() => gitUpdater.startUpdate({ targetVersion: '9.9.9' }), (e) => e.status === 409);
+    assert.equal(readFileSync(dirtyFile, 'utf8'), 'keep local');
+    rmSync(dirtyFile);
+
+    // Non-main branch must be refused (409)
+    execFileSync('git', ['checkout', '-b', 'feature/x'], { cwd: gitClone, windowsHide: true });
+    await assert.rejects(() => gitUpdater.startUpdate({ targetVersion: '9.9.9' }), (e) => e.status === 409);
+    execFileSync('git', ['checkout', 'main'], { cwd: gitClone, windowsHide: true });
+
+    // Clean main fast-forwards cleanly
+    await gitUpdater.startUpdate({ targetVersion: '9.9.9' });
+    const gitJob = await gitUpdater.waitForJob();
+    assert.equal(gitJob.state, 'completed');
+    assert.equal(JSON.parse(readFileSync(join(gitClone, 'plugin.json'), 'utf8')).version, '9.9.9');
+    assert.equal(readFileSync(join(gitClone, 'README.md'), 'utf8').replace(/\r\n/g, '\n'), '# Git v9.9.9\n');
+    assert.equal(gitRestarted, 1);
+  } finally {
+    mockServer.close();
+    rmSync(tmpUpdRoot, { recursive: true, force: true });
   }
 }
 
@@ -1758,6 +2363,7 @@ if (isMain) {
       join(__dirname, 'lib', 'workspace.mjs'),
       join(__dirname, 'lib', 'office-converter.mjs'),
       join(__dirname, 'lib', 'transcript.mjs'),
+      join(__dirname, 'lib', 'updater.mjs'),
     ];
     for (const f of watchTargets) {
       if (existsSync(f)) {
@@ -1768,12 +2374,25 @@ if (isMain) {
       }
     }
 
-    const studio = createStudioServer({
+    let studio = null;
+    studio = createStudioServer({
       SidecarApp,
       Response: ResponseClass,
       appDataDir,
       cacheDir,
       studioDir: __dirname,
+      dataDir: execDataDir || join(tmpdir(), 'sidecar-studio-data'),
+      prepareForSelfUpdate: () => {
+        for (const f of watchTargets) {
+          try {
+            unwatchFile(f);
+          } catch {}
+        }
+      },
+      onRestart: async () => {
+        if (studio) await studio.close();
+        process.exit(0);
+      },
     });
 
     process.on('SIGINT', async () => {

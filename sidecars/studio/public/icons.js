@@ -338,6 +338,14 @@
       <circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.8"/>
       <path d="M8.6 12.2l2.3 2.3 4.7-4.8" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
     </symbol>
+    <symbol id="wsi-ui-update" viewBox="0 0 24 24">
+      <path d="M12 4.2v9.4" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round"/>
+      <path d="M8.5 10.4L12 13.9l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M5.2 15.2v2.4A2.2 2.2 0 0 0 7.4 19.8h9.2a2.2 2.2 0 0 0 2.2-2.2v-2.4" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="wsi-ui-check" viewBox="0 0 24 24">
+      <path d="M5.5 12.5l4.2 4.2 8.8-9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
   `;
 
   function ensureSprite() {
