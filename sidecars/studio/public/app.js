@@ -20,6 +20,9 @@
     return '';
   }
 
+  const MAX_STAGED_COMMENTS = 50;
+  const STAGED_STORAGE_PREFIX = 'ws-studio-staged-comments:';
+
   const state = {
     mode: 'workbench',
     roots: [],
@@ -49,6 +52,10 @@
     conversationId:
       global.sidecar?.conversationId || new URLSearchParams(location.search).get('conversationId') || '',
     pendingQuote: null,
+    stagedComments: [],
+    stagedPopoverOpen: false,
+    stagedStorageKeyLoaded: '',
+    stagedSending: false,
     contextTarget: null,
     tabContextTarget: null,
     openTabsFilterQuery: '',
@@ -176,6 +183,11 @@
     setTreeCollapsed(next);
   });
   global.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && state.stagedPopoverOpen) {
+      e.preventDefault();
+      closeStagedPopover({ restoreFocus: true });
+      return;
+    }
     if ((e.ctrlKey || e.metaKey) && e.key === '\\') {
       e.preventDefault();
       if (state.mode !== 'workbench') switchMode('workbench');
@@ -436,6 +448,7 @@
     state.contextTarget = item;
     $('tabContextMenu')?.classList.add('is-hidden');
     closeOpenTabsPopover();
+    closeStagedPopover();
     const menu = $('treeContextMenu');
     menu.classList.remove('is-hidden');
     const maxX = global.innerWidth - 205;
@@ -449,6 +462,12 @@
     $('tabContextMenu')?.classList.add('is-hidden');
     if (!e.target.closest('#openTabsPopover, #openTabsPickerBtn')) {
       closeOpenTabsPopover();
+    }
+    if (state.stagedPopoverOpen) {
+      const path = e.composedPath();
+      if (!path.includes($('stagedCommentsPopover')) && !path.includes($('stagedCommentsBtn'))) {
+        closeStagedPopover();
+      }
     }
   });
 
@@ -491,17 +510,24 @@
 
   async function sendToAgent(message) {
     try {
+      let result;
       if (global.sidecar?.agent?.sendMessage && state.conversationId) {
-        await global.sidecar.agent.sendMessage(message, state.conversationId);
+        result = await global.sidecar.agent.sendMessage(message, state.conversationId);
       } else {
-        await postJson('/api/agent/send', {
+        result = await postJson('/api/agent/send', {
           message,
           conversationId: state.conversationId,
         });
+        if (result?.success === true) result = result.result;
+      }
+      if (result === false || result?.success === false) {
+        throw new Error(result?.error || result?.message || '宿主未确认发送');
       }
       showToast('已发送给当前对话');
+      return true;
     } catch (err) {
-      showToast(`发送失败: ${err.message}`);
+      showToast(`发送失败: ${err?.message || String(err)}`);
+      return false;
     }
   }
 
@@ -1005,6 +1031,7 @@
 
   function openQuoteModal({ text, locationLabel = '' }) {
     if (!state.activeFile || !text) return;
+    closeStagedPopover();
     quoteFab.classList.add('is-hidden');
     state.pendingQuote = { file: state.activeFile, text, locationLabel };
     const loc = locationLabel ? ` (${locationLabel})` : '';
@@ -1042,22 +1069,284 @@
     await sendToAgent(message);
   });
 
+  // ---------- Staged Document Comments ----------
+  function getStagedStorageKey() {
+    return `${STAGED_STORAGE_PREFIX}${state.conversationId || 'default'}`;
+  }
+
+  function normalizeStagedItem(raw) {
+    if (!raw || typeof raw !== 'object' || typeof raw.text !== 'string' || !raw.text.trim()) return null;
+
+    const file = raw.file && typeof raw.file === 'object' ? raw.file : {};
+    const asString = (value) => typeof value === 'string' ? value : '';
+    const createdAt = Number.isFinite(raw.createdAt) && raw.createdAt > 0 ? raw.createdAt : Date.now();
+    const id = asString(raw.id).trim() || global.crypto?.randomUUID?.() ||
+      `${createdAt}-${Math.random().toString(36).slice(2)}`;
+    const uri = asString(file.uri);
+    return {
+      id,
+      createdAt,
+      file: {
+        name: asString(file.name),
+        path: asString(file.path),
+        relPath: asString(file.relPath),
+        ext: asString(file.ext),
+        category: asString(file.category),
+        uri: /^file:\/\//i.test(uri) ? uri : '',
+      },
+      locationLabel: asString(raw.locationLabel),
+      text: raw.text,
+      comment: asString(raw.comment),
+    };
+  }
+
+  function loadStagedComments() {
+    const key = getStagedStorageKey();
+    if (key === state.stagedStorageKeyLoaded) return;
+    const defaultKey = `${STAGED_STORAGE_PREFIX}default`;
+    const fallbackItems = state.stagedStorageKeyLoaded === defaultKey ? state.stagedComments : [];
+    let items = [];
+    try {
+      const stored = JSON.parse(global.localStorage.getItem(key));
+      if (Array.isArray(stored)) {
+        items = stored.map(normalizeStagedItem).filter(Boolean).slice(0, MAX_STAGED_COMMENTS);
+      }
+    } catch {}
+
+    state.stagedComments = items;
+    state.stagedStorageKeyLoaded = key;
+    if (fallbackItems.length) {
+      const loadedIds = new Set(items.map((item) => item.id));
+      const pending = fallbackItems.filter((item) => !loadedIds.has(item.id));
+      const available = MAX_STAGED_COMMENTS - items.length;
+      const remaining = pending.slice(available);
+      items.push(...pending.slice(0, available));
+      // Keep the fallback copy until the conversation queue has been saved.
+      if (saveStagedComments() && saveStagedComments(remaining, defaultKey) && remaining.length) {
+        showToast(`当前对话已暂存 ${MAX_STAGED_COMMENTS} 条，另有 ${remaining.length} 条保留在默认暂存篮`);
+      }
+    }
+    renderStagedCommentsUi();
+  }
+
+  function saveStagedComments(items = state.stagedComments, key = getStagedStorageKey()) {
+    try {
+      if (items.length) global.localStorage.setItem(key, JSON.stringify(items));
+      else global.localStorage.removeItem(key);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function formatStagedCommentsMessage(items, overallNote = '') {
+    const header = `请处理以下 ${items.length} 条文档批注：`;
+    const note = overallNote.trim();
+    const noteLine = note ? `\n整体要求：${note}` : '';
+    const blocks = items.map((item, idx) => {
+      const pathLabel = item.file.relPath || item.file.path || item.file.name || '未知文档';
+      const loc = item.locationLabel ? ` [${item.locationLabel}]` : '';
+      const quoted = item.text.split(/\r?\n/).map((line) => `> ${line}`).join('\n');
+      const comment = item.comment.trim() || '请参考此引用片段';
+      return `### ${idx + 1}. \`${pathLabel}\`${loc}\n${quoted}\n- 批注：${comment}`;
+    });
+    return `${header}${noteLine}\n\n${blocks.join('\n\n')}`;
+  }
+
+  let stagedClearArmed = false;
+  let stagedClearConfirmTimer = null;
+
+  function resetStagedClearConfirm() {
+    if (stagedClearConfirmTimer) {
+      clearTimeout(stagedClearConfirmTimer);
+      stagedClearConfirmTimer = null;
+    }
+    stagedClearArmed = false;
+    const clearBtn = $('stagedCommentsClearBtn');
+    if (clearBtn) {
+      clearBtn.textContent = '清空';
+      clearBtn.classList.remove('is-confirming');
+    }
+  }
+
+  function renderStagedCommentsUi() {
+    const n = state.stagedComments.length;
+    if (n <= 1) resetStagedClearConfirm();
+    const btn = $('stagedCommentsBtn');
+    btn.classList.toggle('is-hidden', n === 0);
+    btn.setAttribute('aria-label', `待发批注（${n} 条）`);
+    $('stagedCommentsCount').textContent = String(n);
+    $('stagedCommentsTitleCount').textContent = String(n);
+    $('stagedCommentsSendText').textContent = n > 0 ? `合并发给 AI (${n})` : '合并发给 AI';
+    $('stagedCommentsClearBtn').disabled = n === 0;
+    $('stagedCommentsCopyBtn').disabled = n === 0;
+    $('stagedCommentsSendBtn').disabled = n === 0 || state.stagedSending;
+
+    const list = $('stagedCommentsList');
+    list.replaceChildren();
+    if (n === 0) {
+      const empty = document.createElement('p');
+      empty.className = 'ws-staged-empty';
+      empty.textContent = '暂无待发批注，请在预览区划词或选表后点击「暂存为批注」。';
+      list.appendChild(empty);
+      return;
+    }
+
+    state.stagedComments.forEach((item, index) => {
+      const card = document.createElement('div');
+      card.className = 'ws-staged-card';
+      const head = document.createElement('div');
+      head.className = 'ws-staged-card-head';
+      const number = document.createElement('span');
+      number.className = 'ws-staged-index';
+      number.textContent = `#${index + 1}`;
+
+      const source = document.createElement('button');
+      source.className = 'ws-staged-source';
+      source.type = 'button';
+      const location = item.locationLabel ? ` (${item.locationLabel})` : '';
+      source.textContent = `${item.file.relPath || item.file.name || '文档'}${location}`;
+      source.title = source.textContent;
+      source.disabled = !item.file.path;
+      source.addEventListener('click', () => {
+        closeStagedPopover();
+        if (state.mode !== 'workbench') switchMode('workbench');
+        openFilePreview({ ...item.file });
+      });
+
+      const remove = document.createElement('button');
+      remove.className = 'ws-staged-delete';
+      remove.type = 'button';
+      remove.textContent = '×';
+      remove.setAttribute('aria-label', '删除此条批注');
+      remove.addEventListener('click', () => {
+        state.stagedComments = state.stagedComments.filter((entry) => entry.id !== item.id);
+        saveStagedComments();
+        renderStagedCommentsUi();
+        if (!state.stagedComments.length) closeStagedPopover();
+      });
+      head.append(number, source, remove);
+
+      const excerpt = document.createElement('pre');
+      excerpt.className = 'ws-staged-excerpt';
+      excerpt.textContent = item.text;
+      const input = document.createElement('textarea');
+      input.className = 'ws-staged-comment-input';
+      input.rows = 2;
+      input.value = item.comment;
+      input.setAttribute('aria-label', `第 ${index + 1} 条批注`);
+      input.addEventListener('input', () => {
+        item.comment = input.value;
+        saveStagedComments();
+      });
+      card.append(head, excerpt, input);
+      list.appendChild(card);
+    });
+  }
+
+  function openStagedPopover() {
+    if (!state.stagedComments.length) return;
+    closeOpenTabsPopover();
+    $('treeContextMenu').classList.add('is-hidden');
+    $('tabContextMenu')?.classList.add('is-hidden');
+    state.stagedPopoverOpen = true;
+    $('stagedCommentsPopover').classList.remove('is-hidden');
+    const btn = $('stagedCommentsBtn');
+    btn.setAttribute('aria-expanded', 'true');
+    btn.classList.add('is-active');
+    $('stagedCommentsCloseBtn').focus();
+  }
+
+  function closeStagedPopover({ restoreFocus = false } = {}) {
+    resetStagedClearConfirm();
+    if (!state.stagedPopoverOpen) return;
+    state.stagedPopoverOpen = false;
+    $('stagedCommentsPopover').classList.add('is-hidden');
+    const btn = $('stagedCommentsBtn');
+    btn.setAttribute('aria-expanded', 'false');
+    btn.classList.remove('is-active');
+    if (restoreFocus && !btn.classList.contains('is-hidden')) btn.focus();
+  }
+
   $('quoteCommentBtn').addEventListener('click', () => {
     const q = state.pendingQuote;
     if (!q) return;
-    const comment = $('quoteCommentInput').value.trim() || '请参考此引用片段';
-    if (global.sidecar?.ui?.addArtifactComment) {
-      global.sidecar.ui.addArtifactComment({
-        uri: q.file.uri,
-        comment,
-        selection: q.text,
-        pageTitle: q.file.name,
-      });
-      $('quoteModal').classList.add('is-hidden');
-      showToast('已暂存为文档批注，将随你下一条消息发送');
-    } else {
-      showToast('当前环境不支持文档批注暂存');
+    if (state.stagedComments.length >= MAX_STAGED_COMMENTS) {
+      showToast(`最多暂存 ${MAX_STAGED_COMMENTS} 条批注，请先发送或清理后再添加`);
+      return;
     }
+    const comment = $('quoteCommentInput').value.trim() || '请参考此引用片段';
+    const item = normalizeStagedItem({ ...q, comment });
+    if (!item) {
+      showToast('请选择要引用的文档内容');
+      return;
+    }
+    state.stagedComments.push(item);
+    saveStagedComments();
+    state.pendingQuote = null;
+    $('quoteModal').classList.add('is-hidden');
+    renderStagedCommentsUi();
+    const btn = $('stagedCommentsBtn');
+    btn.classList.remove('is-pulse');
+    void btn.offsetWidth;
+    btn.classList.add('is-pulse');
+    btn.focus();
+    showToast(`已暂存第 ${state.stagedComments.length} 条批注（点击右上角「待发批注」查看或合并发送）`);
+  });
+
+  $('stagedCommentsBtn').addEventListener('click', () => {
+    if (state.stagedPopoverOpen) closeStagedPopover({ restoreFocus: true });
+    else openStagedPopover();
+  });
+  $('stagedCommentsCloseBtn').addEventListener('click', () => closeStagedPopover({ restoreFocus: true }));
+
+  $('stagedCommentsClearBtn').addEventListener('click', () => {
+    const n = state.stagedComments.length;
+    if (!n) return;
+    if (n > 1 && !stagedClearArmed) {
+      stagedClearArmed = true;
+      const clearBtn = $('stagedCommentsClearBtn');
+      clearBtn.textContent = '确认清空?';
+      clearBtn.classList.add('is-confirming');
+      stagedClearConfirmTimer = setTimeout(resetStagedClearConfirm, 3000);
+      return;
+    }
+    resetStagedClearConfirm();
+    state.stagedComments = [];
+    saveStagedComments();
+    renderStagedCommentsUi();
+    closeStagedPopover();
+    showToast('已清空待发批注');
+  });
+
+  $('stagedCommentsCopyBtn').addEventListener('click', () => {
+    if (!state.stagedComments.length) return;
+    const message = formatStagedCommentsMessage(state.stagedComments, $('stagedCommentsNote').value);
+    return copyText(message, '已复制全部批注到剪贴板');
+  });
+
+  $('stagedCommentsSendBtn').addEventListener('click', async (e) => {
+    if (!state.stagedComments.length || state.stagedSending) return;
+    const btn = e.currentTarget;
+    const noteInput = $('stagedCommentsNote');
+    const note = noteInput.value;
+    const message = formatStagedCommentsMessage(state.stagedComments, note);
+    const sentComments = new Map(state.stagedComments.map((item) => [item.id, item.comment]));
+    state.stagedSending = true;
+    btn.disabled = true;
+    const ok = await sendToAgent(message);
+    state.stagedSending = false;
+    if (!ok) {
+      btn.disabled = state.stagedComments.length === 0;
+      return;
+    }
+
+    // Preserve comments added or edited while the send was in flight.
+    state.stagedComments = state.stagedComments.filter((item) => sentComments.get(item.id) !== item.comment);
+    if (noteInput.value === note) noteInput.value = '';
+    saveStagedComments();
+    renderStagedCommentsUi();
+    closeStagedPopover();
   });
 
   // ---------- Open Documents Tab Strip & Polling ----------
@@ -1424,6 +1713,7 @@
     }
     const docs = getVisibleTabDocs();
     if (!docs.length) return;
+    closeStagedPopover();
     $('treeContextMenu')?.classList.add('is-hidden');
     $('tabContextMenu')?.classList.add('is-hidden');
     state.openTabsFilterQuery = '';
@@ -1441,6 +1731,7 @@
     if (!menu) return;
     $('treeContextMenu')?.classList.add('is-hidden');
     closeOpenTabsPopover();
+    closeStagedPopover();
 
     state.tabContextTarget = doc;
     const docs = getVisibleTabDocs();
@@ -1630,6 +1921,7 @@
       if (!data?.success) return;
       if (!state.conversationId && data.conversationId) {
         state.conversationId = data.conversationId;
+        if (state.stagedStorageKeyLoaded !== getStagedStorageKey()) loadStagedComments();
       }
       const nextDocs = data.docs || [];
       const wasEmpty = state.producedDocs.length === 0;
@@ -1792,6 +2084,7 @@
 
   // ---------- Bootstrap ----------
   (async function bootstrap() {
+    loadStagedComments();
     try {
       const health = await getJson('/api/health');
       state.capabilities = health.converters || {};

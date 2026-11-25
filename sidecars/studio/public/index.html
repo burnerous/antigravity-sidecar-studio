@@ -60,6 +60,11 @@
       </div>
 
       <div class="ws-topbar-right">
+        <button id="stagedCommentsBtn" class="ws-chip-btn ws-staged-btn is-hidden" type="button" title="查看已暂存的文档批注并一键合并发给 AI" aria-label="待发批注" aria-controls="stagedCommentsPopover" aria-expanded="false">
+          <span class="ws-chip-icon" data-ws-icon="ui-note" data-size="12"></span>
+          <span class="ws-staged-label">待发批注</span>
+          <span id="stagedCommentsCount" class="ws-badge">0</span>
+        </button>
         <select id="rootSelector" class="ws-select is-hidden" title="切换工作区根目录" aria-label="切换工作区根目录"></select>
         <button id="globalRefreshBtn" class="ws-icon-btn" type="button" title="手动刷新当前视图" aria-label="手动刷新">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
@@ -243,8 +248,30 @@
           <textarea id="quoteCommentInput" rows="3" placeholder="例如：请把这一段改写得更精炼，或补充实证数据支持..."></textarea>
         </div>
         <div class="ws-modal-footer">
-          <button id="quoteCommentBtn" class="ws-btn-secondary" type="button" title="暂存为文档批注，随你在聊天框下一条消息一起发出"><span data-ws-icon="ui-note" data-size="13"></span><span>暂存为批注</span></button>
+          <button id="quoteCommentBtn" class="ws-btn-secondary" type="button" title="暂存到右上角「待发批注」篮，可叠加多条后一键合并发给 AI"><span data-ws-icon="ui-note" data-size="13"></span><span>暂存为批注</span></button>
           <button id="quoteSendBtn" class="ws-btn-primary" type="button"><span data-ws-icon="ui-send" data-size="13"></span><span>立即发给 AI</span></button>
+        </div>
+      </div>
+    </div>
+
+    <div id="stagedCommentsPopover" class="ws-staged-popover is-hidden" role="dialog" aria-label="待发批注篮">
+      <div class="ws-staged-header">
+        <div class="ws-staged-title">
+          <span data-ws-icon="ui-note" data-size="14"></span>
+          <span>待发批注</span>
+          <span id="stagedCommentsTitleCount" class="ws-badge">0</span>
+        </div>
+        <div class="ws-staged-header-actions">
+          <button id="stagedCommentsClearBtn" class="ws-btn-ghost ws-btn-xs" type="button">清空</button>
+          <button id="stagedCommentsCloseBtn" class="ws-icon-btn ws-btn-sm" type="button" aria-label="关闭">&times;</button>
+        </div>
+      </div>
+      <div id="stagedCommentsList" class="ws-staged-list"></div>
+      <div class="ws-staged-footer">
+        <input id="stagedCommentsNote" class="ws-staged-note-input" type="text" aria-label="补充整体要求（可选）" placeholder="补充整体要求（可选），如：请按以上批注逐条修改..." autocomplete="off">
+        <div class="ws-staged-footer-actions">
+          <button id="stagedCommentsCopyBtn" class="ws-btn-secondary" type="button"><span data-ws-icon="ui-copy" data-size="13"></span><span>复制全部</span></button>
+          <button id="stagedCommentsSendBtn" class="ws-btn-primary" type="button"><span data-ws-icon="ui-send" data-size="13"></span><span id="stagedCommentsSendText">合并发给 AI</span></button>
         </div>
       </div>
     </div>
