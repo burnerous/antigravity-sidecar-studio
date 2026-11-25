@@ -4,7 +4,7 @@
   <p><strong>把整个文档工作台装进 Google Antigravity 全局侧边栏</strong></p>
   <p>
     <a href="https://github.com/burnerous/antigravity-sidecar-studio/releases/latest">
-      <img src="https://img.shields.io/badge/Release-v1.3.0-3b82f6?style=flat-square" alt="Release v1.0.0" />
+      <img src="https://img.shields.io/badge/Release-v1.4.0-3b82f6?style=flat-square" alt="Release v1.0.0" />
     </a>
     <a href="./LICENSE">
       <img src="https://img.shields.io/badge/License-MIT-10b981?style=flat-square" alt="MIT License" />
@@ -41,7 +41,7 @@
 
 离线整合包已预先打包全部前端离线依赖（均为纯 JS，**跨 Windows / macOS / Linux 通用**），下载解压即可使用，无需运行 `npm install`。
 
-1. 前往 [**Releases 页面**](https://github.com/burnerous/antigravity-sidecar-studio/releases/latest) 下载 `antigravity-sidecar-studio-v1.3.0-offline.zip`。
+1. 前往 [**Releases 页面**](https://github.com/burnerous/antigravity-sidecar-studio/releases/latest) 下载 `antigravity-sidecar-studio-v1.4.0-offline.zip`。
 2. 解压到 Antigravity 全局插件目录：
    - **Windows**：`%USERPROFILE%\.gemini\config\plugins\`
    - **macOS / Linux**：`~/.gemini/config/plugins/`
@@ -66,8 +66,8 @@
    ```powershell
    $pluginsDir = Join-Path $env:USERPROFILE ".gemini\config\plugins"
    New-Item -ItemType Directory -Force -Path $pluginsDir | Out-Null
-   $zipPath = Join-Path $env:TEMP "antigravity-sidecar-studio-v1.3.0-offline.zip"
-   Invoke-WebRequest -Uri "https://github.com/burnerous/antigravity-sidecar-studio/releases/latest/download/antigravity-sidecar-studio-v1.3.0-offline.zip" -OutFile $zipPath
+   $zipPath = Join-Path $env:TEMP "antigravity-sidecar-studio-v1.4.0-offline.zip"
+   Invoke-WebRequest -Uri "https://github.com/burnerous/antigravity-sidecar-studio/releases/latest/download/antigravity-sidecar-studio-v1.4.0-offline.zip" -OutFile $zipPath
    Expand-Archive -Path $zipPath -DestinationPath $pluginsDir -Force
    Remove-Item $zipPath -Force
    ```
@@ -77,7 +77,7 @@
    PLUGINS_DIR="$HOME/.gemini/config/plugins"
    mkdir -p "$PLUGINS_DIR"
    curl -fsSL -o /tmp/antigravity-sidecar-studio.zip \
-     "https://github.com/burnerous/antigravity-sidecar-studio/releases/latest/download/antigravity-sidecar-studio-v1.3.0-offline.zip"
+     "https://github.com/burnerous/antigravity-sidecar-studio/releases/latest/download/antigravity-sidecar-studio-v1.4.0-offline.zip"
    unzip -oq /tmp/antigravity-sidecar-studio.zip -d "$PLUGINS_DIR"
    rm -f /tmp/antigravity-sidecar-studio.zip
    ```
