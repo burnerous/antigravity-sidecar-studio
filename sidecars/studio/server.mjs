@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFile, execFileSync, spawnSync } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import {
   closeSync,
@@ -164,6 +164,45 @@ function handleApiError(ResponseClass, err) {
   return jsonResponse(ResponseClass, { success: false, error: err?.message || 'Internal error' }, status);
 }
 
+function defaultOpenSystemFile(target, { reveal = false } = {}) {
+  return new Promise((resolveOpen, rejectOpen) => {
+    let cmd = '';
+    let args = [];
+    let env = process.env;
+    if (process.platform === 'darwin') {
+      cmd = '/usr/bin/open';
+      args = reveal ? ['-R', target] : [target];
+    } else if (process.platform === 'win32') {
+      if (reveal) {
+        cmd = 'explorer.exe';
+        args = [`/select,${target}`];
+      } else {
+        cmd = 'powershell.exe';
+        args = [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          'Start-Process -LiteralPath $env:AG_OPEN_TARGET',
+        ];
+        env = { ...process.env, AG_OPEN_TARGET: target };
+      }
+    } else {
+      cmd = 'xdg-open';
+      args = [reveal ? dirname(target) : target];
+    }
+    execFile(cmd, args, { timeout: 8000, windowsHide: true, env }, (err, _stdout, stderr) => {
+      // Windows explorer.exe /select commonly exits with code 1 even on success
+      if (
+        err &&
+        !(process.platform === 'win32' && reveal && err.code === 1 && !String(stderr || '').trim())
+      ) {
+        return rejectOpen(new Error(stderr?.trim() || err.message));
+      }
+      resolveOpen();
+    });
+  });
+}
+
 export function createStudioServer({
   SidecarApp,
   Response: ResponseClass,
@@ -175,6 +214,7 @@ export function createStudioServer({
   updaterOptions,
   prepareForSelfUpdate,
   onRestart,
+  openSystemFile = defaultOpenSystemFile,
 } = {}) {
   const app = new SidecarApp();
   const security = new SecurityManager();
@@ -274,6 +314,7 @@ export function createStudioServer({
       return jsonResponse(ResponseClass, {
         success: true,
         status: 'ok',
+        platform: process.platform,
         version: upd.currentVersion,
         installMode: upd.installMode,
         bootId,
@@ -882,6 +923,28 @@ export function createStudioServer({
   app.api('/api/doc/convert', handleDocConvert, 'POST');
   app.api('/api/doc/convert', handleDocConvert, 'GET');
 
+  // POST /api/file/open-system — open file with OS default app or reveal in Finder / Explorer
+  app.api(
+    '/api/file/open-system',
+    async (data) => {
+      try {
+        assertWorkspaceGen(data);
+        const convId = effectiveConvId();
+        const target = security.assertAllowedPath(data?.path || '', {
+          appDataDir,
+          convId,
+          mustExist: true,
+        });
+        const reveal = Boolean(data?.reveal);
+        await openSystemFile(target, { reveal });
+        return jsonResponse(ResponseClass, { success: true, path: target, reveal });
+      } catch (err) {
+        return handleApiError(ResponseClass, err);
+      }
+    },
+    'POST'
+  );
+
   // GET /api/doc/cache-pdf?key=...
   app.api(
     '/api/doc/cache-pdf',
@@ -1175,12 +1238,16 @@ async function runSelfTests() {
   process.env.ANTIGRAVITY_SIDECAR_UI_TOKEN = token;
   process.env.ANTIGRAVITY_CONVERSATION_ID = convId;
 
+  const openedSystemCalls = [];
   const studio = createStudioServer({
     SidecarApp,
     Response: ResponseClass,
     appDataDir,
     cacheDir,
     studioDir: __dirname,
+    openSystemFile: async (target, opts) => {
+      openedSystemCalls.push({ target, reveal: Boolean(opts?.reveal) });
+    },
   });
 
   assert.equal(
@@ -1816,7 +1883,45 @@ async function runSelfTests() {
     assert.equal(existsSync(join(otherConvDir, 'other_annotated.png')), false);
 
     assert.equal(typeof healthJson.version, 'string', 'health exposes version');
+    assert.equal(healthJson.platform, process.platform, 'health exposes platform');
     assert.ok(healthJson.bootId, 'health exposes bootId');
+
+    // 12. POST /api/file/open-system (auth, workspace scope, missing file, stale gen, open & reveal)
+    const openSysRoot = studio.security.registerWorkspaceUris([pathToFileURL(wsDir).href]);
+    const openSys = (fields = {}, auth = true) =>
+      fetch(base + '/api/file/open-system', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(auth ? { 'X-Sidecar-Token': token } : {}),
+        },
+        body: JSON.stringify({
+          path: sampleMd,
+          workspaceGen: openSysRoot.generation,
+          ...fields,
+        }),
+      });
+    assert.equal((await openSys({}, false)).status, 401, 'open-system requires a token');
+    assert.equal((await openSys({ path: escapePath })).status, 403, 'open-system blocks escape path');
+    assert.equal(
+      (await openSys({ path: join(wsDir, 'does-not-exist.docx') })).status,
+      404,
+      'open-system returns 404 for missing file'
+    );
+    assert.equal(
+      (await openSys({ workspaceGen: openSysRoot.generation - 1 })).status,
+      409,
+      'open-system rejects stale workspaceGen'
+    );
+    const rOpenOk = await openSys({ reveal: false });
+    assert.equal(rOpenOk.status, 200);
+    const rRevealOk = await openSys({ reveal: true });
+    assert.equal(rRevealOk.status, 200);
+    assert.equal(openedSystemCalls.length, 2);
+    assert.equal(openedSystemCalls[0].target, realpathSync(sampleMd));
+    assert.equal(openedSystemCalls[0].reveal, false);
+    assert.equal(openedSystemCalls[1].target, realpathSync(sampleMd));
+    assert.equal(openedSystemCalls[1].reveal, true);
 
     await runUpdaterSelfTests({ SidecarApp, ResponseClass });
 

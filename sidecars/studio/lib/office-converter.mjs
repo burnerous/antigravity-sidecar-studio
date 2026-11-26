@@ -11,7 +11,9 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { homedir } from 'node:os';
 import { extname, join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { CACHE_KEY_RE, normalizeCase } from './security.mjs';
 
 const MAX_CONVERT_BYTES = 64 * 1024 * 1024; // 64 MiB safety limit
@@ -78,6 +80,7 @@ export function detectConverters() {
     findFirstExisting([
       'C:\\Program Files\\LibreOffice\\program\\soffice.exe',
       'C:\\Program Files (x86)\\LibreOffice\\program\\soffice.exe',
+      '/Applications/LibreOffice.app/Contents/MacOS/soffice',
     ]) ||
     findOnPath('soffice') ||
     findOnPath('libreoffice');
@@ -451,14 +454,42 @@ export class OfficeConverter {
 
   #runLibreOffice(inputPath, outDir) {
     return new Promise((resolve, reject) => {
+      const profileDir = join(outDir, 'lo-profile');
+      try {
+        mkdirSync(profileDir, { recursive: true });
+      } catch {}
+      const args = [
+        '--headless',
+        '--nologo',
+        '--nodefault',
+        '--norestore',
+        '--nolockcheck',
+        `-env:UserInstallation=${pathToFileURL(profileDir).href}`,
+        '--convert-to',
+        'pdf',
+        '--outdir',
+        outDir,
+        inputPath,
+      ];
+      const env = { ...process.env };
+      if (process.platform === 'darwin') {
+        const userFontsConf = join(homedir(), '.config', 'fontconfig', 'fonts.conf');
+        if (!env.FONTCONFIG_FILE && existsSync(userFontsConf)) {
+          env.FONTCONFIG_FILE = userFontsConf;
+        }
+        if (!env.LC_ALL || env.LC_ALL === 'C' || env.LC_ALL === 'C.UTF-8') {
+          env.LC_ALL = 'zh_CN.UTF-8';
+        }
+      }
       execFile(
         this.#engines.libreoffice,
-        ['--headless', '--norestore', '--convert-to', 'pdf', '--outdir', outDir, inputPath],
+        args,
         {
           timeout: this.#timeoutMs,
           windowsHide: true,
           encoding: 'utf8',
           maxBuffer: 1024 * 1024,
+          env,
         },
         (err, _stdout, stderr) => {
           if (err) {
