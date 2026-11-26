@@ -7,13 +7,18 @@ description: 打开与使用 Sidecar Studio 三合一侧边栏工作台（工作
 
 `antigravity-sidecar-studio` 是全局启用的 Antigravity 辅助面板插件，提供项目文件树、Word/Excel/PPT/PDF 离线高保真预览、当前对话轨迹查看器，以及内置自更新能力。
 
-## 一键唤起侧边栏
+## 一键唤起侧边栏与直达指定文件
 
-向用户输出以下 `sidecar://` 胶囊链接即可直接打开或切换右侧工作台面板：
-
-```markdown
-[📂 打开 Sidecar Studio](sidecar://antigravity-sidecar-studio/studio/)
-```
+- **打开/切换侧边栏工作台**：
+  ```markdown
+  [📂 打开 Sidecar Studio](sidecar://antigravity-sidecar-studio/studio/)
+  ```
+- **直达预览指定文件**（支持 `.docx` / `.xlsx` / `.xls` / `.csv` / `.pptx` / `.pdf` / `.md` / 图片及常见代码文件）：
+  ```markdown
+  [📂 在 Sidecar Studio 中打开 <文件名>](sidecar://antigravity-sidecar-studio/studio/?file=<URL编码后的绝对路径>)
+  ```
+  - 路径统一使用正斜杠 `/`（Windows 如 `C:/path/to/file.md`，macOS/Linux 如 `/path/to/file.md`）。
+  - 文件名或路径包含空格、括号、`#` 等特殊字符时需做 percent-encoding（空格→`%20`、`(`→`%28`、`)`→`%29`、`#`→`%23`），避免破坏 Markdown 链接或被截断。
 
 ## 核心能力与使用提示
 

@@ -19,8 +19,10 @@
           ".docx",
           ".xlsx",
           ".xls",
+          ".csv",
           ".pptx",
-          ".pdf"
+          ".pdf",
+          ".md"
         ]
       }
     ]

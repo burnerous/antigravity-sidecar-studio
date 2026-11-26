@@ -48,6 +48,7 @@
     openTabs: [],
     dismissedPaths: new Map(),
     hasUserClosedAll: false,
+    hasInitialFileParam: false,
     capabilities: {},
     conversationId:
       global.sidecar?.conversationId || new URLSearchParams(location.search).get('conversationId') || '',
@@ -636,7 +637,7 @@
         const stData = await getJson(
           `/api/file/stat?path=${encodeURIComponent(file.path)}&conversationId=${encodeURIComponent(
             state.conversationId || ''
-          )}&workspaceGen=${encodeURIComponent(String(state.workspaceGen))}`
+          )}`
         );
         if (openSeq !== state.previewOpenSeq) {
           runCleanups();
@@ -657,7 +658,8 @@
     }
 
     state.activeFile = file;
-    state.activeFileSig = file.version || `${Math.floor(file.mtimeMs || 0)}:${file.size || 0}`;
+    state.activeFileSig =
+      file.version || (file.mtimeMs ? `${Math.floor(file.mtimeMs)}:${file.size || 0}` : '');
 
     $('previewHeader').classList.remove('is-hidden');
     $('previewFileIcon').innerHTML = getFileIcon(file, { size: 22 });
@@ -1950,7 +1952,8 @@
 
       const activeProduced = nextDocs.filter((d) => !isPathDismissed(d));
       const qs = new URLSearchParams(location.search);
-      const hasInitialFile = Boolean(qs.get('file') || qs.get('uri') || qs.get('path'));
+      const hasInitialFile =
+        state.hasInitialFileParam || Boolean(qs.get('file') || qs.get('uri') || qs.get('path'));
       if (!state.activeFile && !state.hasUserClosedAll && !hasInitialFile && activeProduced.length > 0) {
         const target = state.producedOnlyDocs
           ? activeProduced.find((d) => d.isDoc)
@@ -1990,6 +1993,17 @@
       if (!data?.success || !data.exists) return;
       const nextSig =
         data.version || `${Math.floor(data.mtimeMs || 0)}:${data.size || 0}`;
+      if (!state.activeFileSig) {
+        state.activeFileSig = nextSig;
+        state.activeFile = {
+          ...state.activeFile,
+          mtimeMs: data.mtimeMs,
+          size: data.size,
+          version: data.version || '',
+        };
+        upsertOpenTab(state.activeFile);
+        return;
+      }
       if (nextSig !== state.activeFileSig) {
         if (state.activeController?.isDirty?.()) {
           state.activeFileSig = nextSig;
@@ -2596,6 +2610,89 @@
     showToast('Sidecar Studio 尚未就绪，请稍候再试或重新打开面板');
   });
 
+  function parseDeepLinkFileParam(rawParam) {
+    let clean = String(rawParam || '').trim();
+    if (!clean) return null;
+    clean = clean.replace(/#.*$/, '');
+    if (!clean) return null;
+    const hadFileScheme = /^file:\/\//i.test(clean);
+    clean = clean.replace(/^file:\/\/(?:localhost)?/i, '');
+    try {
+      clean = decodeURIComponent(clean);
+    } catch {}
+    clean = clean.replace(/^\/([A-Za-z]:[\\/])/, '$1');
+    if (!clean) return null;
+
+    const isAbs = /^(?:[A-Za-z]:[\\/]|\/|\\\\)/.test(clean);
+    if (!isAbs && state.activeRoot) {
+      const root = state.activeRoot.replace(/[\\/]+$/, '');
+      const sep = root.includes('\\') && !root.includes('/') ? '\\' : '/';
+      const relClean = clean.replace(/^\.[\\/]+/, '').replace(/[\\/]+/g, sep);
+      clean = `${root}${sep}${relClean}`;
+    }
+
+    const name = clean.split(/[\\/]/).filter(Boolean).pop() || clean;
+    const extMatch = /\.[^.]+$/.exec(name);
+    const ext = extMatch ? extMatch[0].toLowerCase() : '';
+    const catMap = {
+      '.docx': 'docx',
+      '.xlsx': 'xlsx',
+      '.xls': 'xlsx',
+      '.csv': 'xlsx',
+      '.pptx': 'pptx',
+      '.pdf': 'pdf',
+      '.md': 'markdown',
+      '.markdown': 'markdown',
+      '.png': 'image',
+      '.jpg': 'image',
+      '.jpeg': 'image',
+      '.webp': 'image',
+      '.svg': 'image',
+      '.gif': 'image',
+      '.bmp': 'image',
+      '.ico': 'image',
+    };
+
+    let relPath = name;
+    if (state.activeRoot) {
+      const rootNorm = state.activeRoot.replace(/\\/g, '/').replace(/\/+$/, '');
+      const cleanNorm = clean.replace(/\\/g, '/');
+      const isWinPath = /^[A-Za-z]:\//.test(rootNorm) || cleanNorm.startsWith('//');
+      const rootCmp = isWinPath ? rootNorm.toLowerCase() : rootNorm;
+      const cleanCmp = isWinPath ? cleanNorm.toLowerCase() : cleanNorm;
+      if (cleanCmp.startsWith(`${rootCmp}/`)) {
+        relPath = cleanNorm.slice(rootNorm.length + 1) || name;
+      }
+    }
+
+    return {
+      name,
+      path: clean,
+      relPath,
+      ext,
+      category: catMap[ext] || 'code',
+      uri: hadFileScheme ? String(rawParam).trim() : '',
+    };
+  }
+
+  async function openDeepLinkFile(rawParam) {
+    const fileObj = parseDeepLinkFileParam(rawParam);
+    if (!fileObj) return false;
+    await openFilePreview(fileObj);
+    try {
+      const url = new URL(global.location.href);
+      if (url.searchParams.has('file') || url.searchParams.has('uri') || url.searchParams.has('path')) {
+        url.searchParams.delete('file');
+        url.searchParams.delete('uri');
+        url.searchParams.delete('path');
+        const nextSearch = url.searchParams.toString();
+        const nextUrl = `${url.pathname}${nextSearch ? `?${nextSearch}` : ''}${url.hash || ''}`;
+        global.history?.replaceState?.(global.history.state, '', nextUrl);
+      }
+    } catch {}
+    return true;
+  }
+
   // ---------- Bootstrap ----------
   (async function bootstrap() {
     loadStagedComments();
@@ -2633,6 +2730,7 @@
 
     const params = new URLSearchParams(location.search);
     const initialFileParam = params.get('file') || params.get('uri') || params.get('path') || '';
+    state.hasInitialFileParam = Boolean(initialFileParam);
 
     if (global.sidecar?.getWorkspaceUris) {
       global.sidecar.onWorkspaceChange((uris) => {
@@ -2649,36 +2747,18 @@
     }
 
     if (initialFileParam) {
-      const clean = initialFileParam.replace(/^file:\/\//i, '');
-      const name = clean.split(/[\\/]/).pop() || clean;
-      const extMatch = /\.[^.]+$/.exec(name);
-      const ext = extMatch ? extMatch[0].toLowerCase() : '';
-      const catMap = {
-        '.docx': 'docx',
-        '.xlsx': 'xlsx',
-        '.xls': 'xlsx',
-        '.csv': 'xlsx',
-        '.pptx': 'pptx',
-        '.pdf': 'pdf',
-        '.md': 'markdown',
-        '.png': 'image',
-        '.jpg': 'image',
-        '.jpeg': 'image',
-        '.webp': 'image',
-        '.svg': 'image',
-        '.gif': 'image',
-        '.bmp': 'image',
-        '.ico': 'image',
-      };
-      await openFilePreview({
-        name,
-        path: initialFileParam,
-        relPath: name,
-        ext,
-        category: catMap[ext] || 'code',
-        uri: initialFileParam.startsWith('file://') ? initialFileParam : '',
-      });
+      await openDeepLinkFile(initialFileParam);
+      state.hasInitialFileParam = false;
     }
+
+    const onPopState = () => {
+      const qs = new URLSearchParams(location.search);
+      const nextFileParam = qs.get('file') || qs.get('uri') || qs.get('path') || '';
+      if (nextFileParam) {
+        openDeepLinkFile(nextFileParam);
+      }
+    };
+    global.addEventListener('popstate', onPopState);
 
     state.pollTimers.push(
       setInterval(pollActiveFileStat, 2000),
@@ -2687,6 +2767,7 @@
     );
 
     global.addEventListener('pagehide', () => {
+      global.removeEventListener('popstate', onPopState);
       for (const id of state.pollTimers) clearInterval(id);
       state.pollTimers = [];
       stopUpdatePolling();
