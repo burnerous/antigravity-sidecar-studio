@@ -272,15 +272,29 @@ export class SecurityManager {
         throw makeHttpError(403, 'Failed to resolve path');
       }
     } else {
+      let resolvedNonExistent = local;
+      try {
+        const tail = [];
+        let cur = local;
+        while (cur && !existsSync(cur)) {
+          const parent = dirname(cur);
+          if (!parent || parent === cur) break;
+          tail.unshift(basename(cur));
+          cur = parent;
+        }
+        if (cur && existsSync(cur)) {
+          resolvedNonExistent = tail.length ? join(realpathSync(cur), ...tail) : realpathSync(cur);
+        }
+      } catch {}
       if (mustExist) {
         // Distinguish 403 outside sandbox vs 404 inside sandbox
-        const inSandbox = roots.some((r) => isUnderRoot(local, r));
+        const inSandbox = roots.some((r) => isUnderRoot(resolvedNonExistent, r));
         if (!inSandbox) {
           throw makeHttpError(403, 'Access denied: path outside allowed workspace');
         }
         throw makeHttpError(404, 'File or directory not found');
       }
-      real = local;
+      real = resolvedNonExistent;
     }
 
     const allowed = roots.some((r) => isUnderRoot(real, r));

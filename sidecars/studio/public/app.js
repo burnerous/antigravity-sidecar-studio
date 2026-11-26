@@ -287,7 +287,7 @@
       btnNative.type = 'button';
       btnNative.className = 'ws-tree-mini-btn';
       btnNative.textContent = '原生';
-      btnNative.title = '在 Antigravity 原生标签页打开';
+      btnNative.title = '用系统默认应用打开';
       btnNative.addEventListener('click', (e) => {
         e.stopPropagation();
         openInNativeTab(item);
@@ -465,7 +465,7 @@
     const menu = $('treeContextMenu');
     menu.classList.remove('is-hidden');
     const maxX = global.innerWidth - 205;
-    const maxY = global.innerHeight - 175;
+    const maxY = global.innerHeight - 235;
     menu.style.left = `${Math.max(6, Math.min(x, maxX))}px`;
     menu.style.top = `${Math.max(6, Math.min(y, maxY))}px`;
   }
@@ -492,7 +492,11 @@
     if (act === 'preview') {
       await openFilePreview(item);
     } else if (act === 'native') {
-      openInNativeTab(item);
+      await openInSystemApp(item);
+    } else if (act === 'reveal') {
+      await openInSystemApp(item, { reveal: true });
+    } else if (act === 'native-tab') {
+      openInAntigravityTab(item);
     } else if (act === 'copy-rel') {
       await copyText(item.relPath || item.name, '已复制相对路径');
     } else if (act === 'copy-abs') {
@@ -511,14 +515,83 @@
     }
   }
 
-  function openInNativeTab(file) {
+  function detectClientPlatform() {
+    if (state.platform) return state.platform;
+    const p = String(navigator?.platform || navigator?.userAgent || '').toLowerCase();
+    if (p.includes('mac')) return 'darwin';
+    if (p.includes('win')) return 'win32';
+    return 'linux';
+  }
+
+  function getSystemOpenLabels() {
+    const plat = detectClientPlatform();
+    if (plat === 'darwin') {
+      return {
+        revealBtn: 'Finder',
+        revealTitle: '在 Finder 中显示当前文件',
+        revealMenu: '在 Finder 中显示',
+        revealToast: (name) => `已在 Finder 中显示 ${name}`,
+      };
+    }
+    if (plat === 'win32') {
+      return {
+        revealBtn: '目录',
+        revealTitle: '在文件资源管理器中显示当前文件',
+        revealMenu: '在文件资源管理器中显示',
+        revealToast: (name) => `已在文件资源管理器中显示 ${name}`,
+      };
+    }
+    return {
+      revealBtn: '目录',
+      revealTitle: '在文件管理器中打开所在目录',
+      revealMenu: '在文件管理器中显示',
+      revealToast: (name) => `已在文件管理器中打开 ${name} 所在目录`,
+    };
+  }
+
+  function applyPlatformLabels() {
+    const labels = getSystemOpenLabels();
+    const revealBtn = $('previewRevealSystemBtn');
+    if (revealBtn) {
+      revealBtn.textContent = labels.revealBtn;
+      revealBtn.title = labels.revealTitle;
+    }
+    const treeLbl = $('treeCtxRevealLabel');
+    if (treeLbl) treeLbl.textContent = labels.revealMenu;
+    const tabLbl = $('tabCtxRevealLabel');
+    if (tabLbl) tabLbl.textContent = labels.revealMenu;
+  }
+
+  applyPlatformLabels();
+
+  function openInAntigravityTab(file) {
     if (!file?.uri) return;
     if (global.sidecar?.ui?.toggleAuxPane) {
       global.sidecar.ui.toggleAuxPane({ tabType: 'fileView', uri: file.uri });
-      showToast(`已请求原生打开 ${file.name}`);
+      showToast(`已请求在 Antigravity 标签打开 ${file.name}`);
     } else {
       showToast('当前独立浏览器模式不支持原生标签页打开');
     }
+  }
+
+  async function openInSystemApp(file, { reveal = false } = {}) {
+    if (!file?.path) return;
+    try {
+      await postJson('/api/file/open-system', {
+        path: file.path,
+        reveal,
+        conversationId: state.conversationId,
+        workspaceGen: state.workspaceGen,
+      });
+      const labels = getSystemOpenLabels();
+      showToast(reveal ? labels.revealToast(file.name) : `已用系统应用打开 ${file.name}`);
+    } catch (err) {
+      showToast(`打开失败: ${err?.message || String(err)}`);
+    }
+  }
+
+  function openInNativeTab(file, opts) {
+    return openInSystemApp(file, opts);
   }
 
   async function sendToAgent(message) {
@@ -886,7 +959,10 @@
   $('previewLocateTreeBtn')?.addEventListener('click', () => {
     if (state.activeFile) revealFileInTree(state.activeFile);
   });
-  $('previewOpenNativeBtn').addEventListener('click', () => openInNativeTab(state.activeFile));
+  $('previewOpenNativeBtn').addEventListener('click', () => openInSystemApp(state.activeFile));
+  $('previewRevealSystemBtn')?.addEventListener('click', () =>
+    openInSystemApp(state.activeFile, { reveal: true })
+  );
   $('previewSendPathBtn').addEventListener('click', () => {
     if (state.activeFile) sendFilePathToAgent(state.activeFile);
   });
@@ -1775,6 +1851,10 @@
     $('tabContextMenu')?.classList.add('is-hidden');
     if (act === 'locate-tree') {
       await revealFileInTree(doc);
+    } else if (act === 'open-system') {
+      await openInSystemApp(doc);
+    } else if (act === 'reveal-system') {
+      await openInSystemApp(doc, { reveal: true });
     } else if (act === 'close-self') {
       await closeTab(doc);
     } else if (act === 'close-others') {
@@ -2603,6 +2683,8 @@
       const health = await getJson('/api/health');
       state.capabilities = health.converters || {};
       state.bootId = health.bootId || '';
+      state.platform = health.platform || '';
+      applyPlatformLabels();
       if (Number.isFinite(health?.generation)) {
         state.workspaceGen = Math.max(state.workspaceGen, health.generation);
       }

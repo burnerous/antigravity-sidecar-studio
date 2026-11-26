@@ -157,7 +157,8 @@
               </svg>
             </button>
             <button id="previewLocateTreeBtn" class="ws-btn-ghost" type="button" title="在左侧文件树中展开目录并高亮定位当前文件">定位文件</button>
-            <button id="previewOpenNativeBtn" class="ws-btn-ghost" type="button" title="在 Antigravity 原生标签页中打开">原生打开</button>
+            <button id="previewOpenNativeBtn" class="ws-btn-ghost" type="button" title="用系统默认应用打开">原生打开</button>
+            <button id="previewRevealSystemBtn" class="ws-btn-ghost" type="button" title="在系统文件管理器中显示当前文件">Finder</button>
             <button id="previewSendPathBtn" class="ws-btn-ghost" type="button" title="将此文件路径发送给当前对话">发路径</button>
           </div>
         </div>
@@ -216,7 +217,9 @@
     <!-- File Tree Context Menu -->
     <div id="treeContextMenu" class="ws-context-menu is-hidden" role="menu">
       <button type="button" data-action="preview"><span data-ws-icon="ui-eye" data-size="14"></span><span>在预览区打开</span></button>
-      <button type="button" data-action="native"><span data-ws-icon="ui-external" data-size="14"></span><span>在 Antigravity 原生标签打开</span></button>
+      <button type="button" data-action="native"><span data-ws-icon="ui-external" data-size="14"></span><span>用系统默认应用打开</span></button>
+      <button type="button" data-action="reveal"><span data-ws-icon="ui-search" data-size="14"></span><span id="treeCtxRevealLabel">在 Finder 中显示</span></button>
+      <button type="button" data-action="native-tab"><span data-ws-icon="ui-external" data-size="14"></span><span>在 Antigravity 标签打开</span></button>
       <hr>
       <button type="button" data-action="copy-rel"><span data-ws-icon="ui-copy" data-size="14"></span><span>复制相对路径</span></button>
       <button type="button" data-action="copy-abs"><span data-ws-icon="ui-copy" data-size="14"></span><span>复制绝对路径</span></button>
@@ -226,6 +229,8 @@
     <!-- 标签栏右键快捷菜单 -->
     <div id="tabContextMenu" class="ws-context-menu is-hidden" role="menu">
       <button type="button" data-tab-action="locate-tree"><span data-ws-icon="ui-search" data-size="14"></span><span>在文件树中定位</span></button>
+      <button type="button" data-tab-action="open-system"><span data-ws-icon="ui-external" data-size="14"></span><span>用系统默认应用打开</span></button>
+      <button type="button" data-tab-action="reveal-system"><span data-ws-icon="ui-search" data-size="14"></span><span id="tabCtxRevealLabel">在 Finder 中显示</span></button>
       <hr>
       <button type="button" data-tab-action="close-self"><span data-ws-icon="ui-close" data-size="14"></span><span>关闭此标签</span></button>
       <button type="button" data-tab-action="close-others"><span data-ws-icon="ui-close" data-size="14"></span><span>关闭其他标签</span></button>
