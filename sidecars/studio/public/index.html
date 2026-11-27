@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' blob: data:; media-src 'none'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self' 'unsafe-inline'; worker-src 'self' blob:; connect-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self' 'unsafe-inline'; worker-src 'self' blob:; connect-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none';">
   <title>Sidecar Studio</title>
   <script src="/preload.js"></script>
   <script>
@@ -168,7 +168,7 @@
           <div id="previewEmptyState" class="ws-empty-welcome">
             <div class="ws-empty-hero" data-ws-icon="hero-workspace" data-size="52"></div>
             <h3>Sidecar Studio 三合一工作台</h3>
-            <p>从左侧文件树或上方文档标签栏点击任意文件即可实时高保真预览：<br>Word (<code>.docx</code>) · Excel (<code>.xlsx/.xls/.csv</code>) · PPT (<code>.pptx</code>) · PDF · Markdown · 图片 · 代码</p>
+            <p>从左侧文件树或上方文档标签栏点击任意文件即可实时高保真预览：<br>Word (<code>.docx</code>) · Excel (<code>.xlsx/.xls/.csv</code>) · PPT (<code>.pptx</code>) · PDF · Markdown · 图片 · 视频 (<code>.mp4</code>) · 代码</p>
             <div id="welcomeRecentDocs" class="ws-welcome-recents"></div>
           </div>
         </div>
@@ -379,6 +379,7 @@
   <script src="/previewers/xlsx-viewer.js"></script>
   <script src="/previewers/pptx-viewer.js"></script>
   <script src="/previewers/image-viewer.js"></script>
+  <script src="/previewers/video-viewer.js"></script>
   <script src="/previewers/text-viewer.js"></script>
   <script src="/trajectory-view.js"></script>
   <script src="/app.js"></script>

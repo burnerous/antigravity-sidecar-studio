@@ -4,6 +4,7 @@
   const {
     renderDocxPreview,
     renderImagePreview,
+    renderVideoPreview,
     renderPdfPreview,
     renderPptxPreview,
     renderTextOrImagePreview,
@@ -858,6 +859,8 @@
         ctrl = await renderPdfPreview(ctx);
       } else if (file.category === 'image' && typeof renderImagePreview === 'function') {
         ctrl = await renderImagePreview(ctx);
+      } else if (file.category === 'video' && typeof renderVideoPreview === 'function') {
+        ctrl = await renderVideoPreview(ctx);
       } else {
         ctrl = await renderTextOrImagePreview(ctx);
       }
@@ -1437,7 +1440,7 @@
       <div id="previewEmptyState" class="ws-empty-welcome">
         <div class="ws-empty-hero" data-ws-icon="hero-workspace" data-size="52"></div>
         <h3>Sidecar Studio 三合一工作台</h3>
-        <p>从左侧文件树或上方文档标签栏点击任意文件即可实时高保真预览：<br>Word (<code>.docx</code>) · Excel (<code>.xlsx/.xls/.csv</code>) · PPT (<code>.pptx</code>) · PDF · Markdown · 图片 · 代码</p>
+        <p>从左侧文件树或上方文档标签栏点击任意文件即可实时高保真预览：<br>Word (<code>.docx</code>) · Excel (<code>.xlsx/.xls/.csv</code>) · PPT (<code>.pptx</code>) · PDF · Markdown · 图片 · 视频 (<code>.mp4</code>) · 代码</p>
         <div id="welcomeRecentDocs" class="ws-welcome-recents"></div>
       </div>
     `;
@@ -2641,6 +2644,7 @@
       '.csv': 'xlsx',
       '.pptx': 'pptx',
       '.pdf': 'pdf',
+      '.mp4': 'video',
       '.md': 'markdown',
       '.markdown': 'markdown',
       '.png': 'image',

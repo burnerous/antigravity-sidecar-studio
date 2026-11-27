@@ -945,6 +945,97 @@ input::placeholder, textarea::placeholder {
   gap: 7px;
 }
 
+/* Native MP4 Video Preview */
+.ws-video-shell {
+  --ws-video-shadow: 0 12px 36px rgb(0 0 0 / 28%);
+  display: flex;
+  min-height: 100%;
+  background: var(--ws-surface);
+}
+
+:root[data-theme="light"] .ws-video-shell {
+  --ws-video-shadow: 0 10px 30px rgb(15 23 42 / 12%);
+}
+
+.ws-video-shell:focus-visible {
+  outline: 2px solid var(--ws-primary);
+  outline-offset: -2px;
+}
+
+.ws-video-viewport {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  place-items: center;
+  padding: clamp(10px, 3vw, 28px);
+}
+
+.ws-video-frame {
+  width: min(100%, 960px);
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--ws-border-strong);
+  border-radius: 12px;
+  background: var(--ws-bg);
+  box-shadow: var(--ws-video-shadow);
+}
+
+.ws-video-el {
+  display: block;
+  width: 100%;
+  min-height: 160px;
+  max-height: max(200px, calc(100vh - 220px));
+  object-fit: contain;
+  background: #080b10;
+}
+
+.ws-video-el[hidden] { display: none; }
+
+.ws-video-btn,
+.ws-video-select {
+  border: 1px solid var(--ws-border);
+  border-radius: 6px;
+  padding: 4px 9px;
+  background: var(--ws-card);
+  color: var(--ws-fg);
+  font: 500 12px/1.4 var(--ws-font-sans);
+}
+
+.ws-video-btn { cursor: pointer; white-space: nowrap; }
+.ws-video-select { cursor: pointer; }
+.ws-video-btn:hover:enabled,
+.ws-video-select:hover:enabled { background: var(--ws-card-hover); }
+.ws-video-btn:disabled,
+.ws-video-select:disabled { opacity: 0.5; cursor: default; }
+.ws-video-btn:focus-visible,
+.ws-video-select:focus-visible { outline: 2px solid var(--ws-primary); outline-offset: 2px; }
+
+.ws-video-btn.is-active {
+  border-color: var(--ws-primary);
+  background: var(--ws-primary-soft);
+}
+
+.ws-video-meta {
+  padding: 3px 8px;
+  border: 1px solid var(--ws-border);
+  border-radius: 999px;
+  background: var(--ws-surface);
+  color: var(--ws-muted);
+  font: 11px/1.5 var(--ws-font-mono);
+  white-space: nowrap;
+}
+
+.ws-video-error {
+  padding: 28px 22px;
+  color: var(--ws-fg);
+  background: var(--ws-card);
+  text-align: center;
+  overflow-wrap: anywhere;
+}
+
+.ws-video-error strong { color: var(--ws-warn); }
+.ws-video-error p { margin: 10px 0 0; color: var(--ws-muted); line-height: 1.7; }
+
 /* DOCX Native & Reader Styles */
 .ws-docx-stage {
   padding: 12px;

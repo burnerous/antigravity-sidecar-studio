@@ -20,7 +20,7 @@ import {
 import { classifyFile, isDocumentCategory } from './workspace.mjs';
 
 const UUID_FILE_RE = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.(?:lock|pbtxt)$/i;
-const DOC_FILE_EXT_RE = /\.(docx|xlsx|xls|csv|pptx|pdf|md|markdown|png|jpe?g|gif|webp|svg)$/i;
+const DOC_FILE_EXT_RE = /\.(docx|xlsx|xls|csv|pptx|pdf|md|markdown|png|jpe?g|gif|webp|svg|mp4)$/i;
 const WIN_PATH_RE = /([A-Za-z]:\\[^\s"'`<>|*?]+?\.[A-Za-z0-9]{1,10})/g;
 const UNIX_OR_URI_PATH_RE = /file:\/\/\/[^\s"'`<>)]+/gi;
 const WRITE_TOOLS = new Set([
@@ -189,7 +189,7 @@ function buildFileMeta(absPath, workspaceRoots) {
     relPath,
     ext: extname(name).toLowerCase(),
     category,
-    isDoc: isDocumentCategory(category) || category === 'image',
+    isDoc: isDocumentCategory(category) || category === 'image' || category === 'video',
     size: st.size,
     mtimeMs: st.mtimeMs,
     uri: localPathToUri(absPath),
@@ -222,7 +222,7 @@ function extractPathsFromText(text) {
   for (const m of text.matchAll(UNIX_OR_URI_PATH_RE)) found.push(m[0]);
   for (const m of text.matchAll(WIN_PATH_RE)) found.push(m[1]);
   // Quoted doc filenames/relative paths
-  const relDocRe = /["'`]([^"'`\r\n]{1,220}\.(?:docx|xlsx|xls|csv|pptx|pdf|md))["'`]/gi;
+  const relDocRe = /["'`]([^"'`\r\n]{1,220}\.(?:docx|xlsx|xls|csv|pptx|pdf|md|mp4))["'`]/gi;
   for (const m of text.matchAll(relDocRe)) found.push(m[1]);
   return found;
 }

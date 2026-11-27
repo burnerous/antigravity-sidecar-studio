@@ -4,6 +4,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import {
   closeSync,
   cpSync,
+  createReadStream,
   existsSync,
   linkSync,
   lstatSync,
@@ -17,6 +18,7 @@ import {
   renameSync,
   rmSync,
   statSync,
+  truncateSync,
   unlinkSync,
   unwatchFile,
   utimesSync,
@@ -65,6 +67,7 @@ const FILE_MIME_TYPES = {
   '.csv': 'text/csv; charset=utf-8',
   '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   '.pdf': 'application/pdf',
+  '.mp4': 'video/mp4',
   '.ts': 'text/plain; charset=utf-8',
   '.tsx': 'text/plain; charset=utf-8',
   '.jsx': 'text/plain; charset=utf-8',
@@ -78,6 +81,7 @@ const FILE_MIME_TYPES = {
   '.log': 'text/plain; charset=utf-8',
 };
 
+const VIDEO_STREAM_MIME_TYPES = { '.mp4': 'video/mp4' };
 const ACTIVE_DOC_EXTS = new Set(['.html', '.htm', '.svg', '.xml', '.xhtml']);
 const SAVE_AS_IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp']);
 const MAX_RAW_FILE_BYTES = 128 * 1024 * 1024; // 128 MB safety guard
@@ -210,6 +214,112 @@ export function createStudioServer({
     const existingListeners = httpServer.listeners('request').slice();
     httpServer.removeAllListeners('request');
     httpServer.on('request', (req, res) => {
+      if (req.method === 'GET' || req.method === 'HEAD') {
+        try {
+          const parsedUrl = new URL(req.url || '/', 'http://127.0.0.1');
+          if (parsedUrl.pathname === '/api/file/stream') {
+            assertWorkspaceGen({ workspaceGen: parsedUrl.searchParams.get('workspaceGen') });
+            const target = security.assertAllowedPath(parsedUrl.searchParams.get('path') || '', {
+              appDataDir,
+              convId: effectiveConvId(),
+              mustExist: true,
+              expectFile: true,
+            });
+            const ext = extname(target).toLowerCase();
+            const contentType = VIDEO_STREAM_MIME_TYPES[ext];
+            if (!contentType) throw makeHttpError(415, 'Unsupported media type for streaming');
+
+            const st = statSync(target);
+            const fileVersion = computeFileVersion(target, st);
+            const baseHeaders = {
+              'Content-Type': contentType,
+              'Accept-Ranges': 'bytes',
+              'Cache-Control': 'no-store',
+              'X-Content-Type-Options': 'nosniff',
+              'Content-Security-Policy': "default-src 'none'; sandbox",
+              'X-File-Mtime': String(st.mtimeMs),
+              'X-File-Size': String(st.size),
+              'X-File-Version': fileVersion,
+            };
+            const rejectRange = () => {
+              res.writeHead(416, {
+                ...baseHeaders,
+                'Content-Type': 'application/json; charset=utf-8',
+                'Content-Range': `bytes */${st.size}`,
+              });
+              res.end(req.method === 'HEAD' ? undefined : JSON.stringify({ success: false, error: 'Range Not Satisfiable' }));
+            };
+            const pipeFile = (options) => {
+              const stream = createReadStream(target, options);
+              res.once('close', () => {
+                if (!stream.destroyed) stream.destroy();
+              });
+              stream.on('error', (streamErr) => {
+                if (!res.headersSent) {
+                  res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+                  res.end(JSON.stringify({ success: false, error: streamErr?.message || 'Stream error' }));
+                } else {
+                  res.destroy(streamErr);
+                }
+              });
+              stream.pipe(res);
+            };
+
+            // Streaming deliberately bypasses the buffered /api/file/raw size limit.
+            if (req.headers.range == null) {
+              res.writeHead(200, { ...baseHeaders, 'Content-Length': String(st.size) });
+              if (req.method === 'HEAD' || st.size === 0) res.end();
+              else pipeFile();
+              return;
+            }
+
+            const rangeHeader = req.headers.range.trim();
+            const match = /^bytes=(\d*)-(\d*)$/i.exec(rangeHeader);
+            if (rangeHeader.includes(',') || !match || st.size === 0 || (!match[1] && !match[2])) {
+              rejectRange();
+              return;
+            }
+            const [, startStr, endStr] = match;
+            let start, end;
+            if (startStr === '') {
+              const suffixLen = Number(endStr);
+              if (!Number.isSafeInteger(suffixLen) || suffixLen <= 0) {
+                rejectRange();
+                return;
+              }
+              start = Math.max(0, st.size - suffixLen);
+              end = st.size - 1;
+            } else {
+              start = Number(startStr);
+              end = endStr === '' ? st.size - 1 : Math.min(Number(endStr), st.size - 1);
+              if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || start >= st.size || start > end) {
+                rejectRange();
+                return;
+              }
+            }
+            res.writeHead(206, {
+              ...baseHeaders,
+              'Content-Range': `bytes ${start}-${end}/${st.size}`,
+              'Content-Length': String(end - start + 1),
+            });
+            if (req.method === 'HEAD') res.end();
+            else pipeFile({ start, end });
+            return;
+          }
+        } catch (err) {
+          if (res.headersSent) {
+            res.destroy(err);
+          } else {
+            res.writeHead(Number.isInteger(err?.status) ? err.status : 500, {
+              'Content-Type': 'application/json; charset=utf-8',
+              'Cache-Control': 'no-store',
+              'X-Content-Type-Options': 'nosniff',
+            });
+            res.end(req.method === 'HEAD' ? undefined : JSON.stringify({ success: false, error: err?.message || 'Internal error' }));
+          }
+          return;
+        }
+      }
       if (req.method !== 'GET') {
         const declaredLen = Number(req.headers['content-length']);
         if (Number.isFinite(declaredLen) && declaredLen > MAX_POST_BODY_BYTES) {
@@ -1115,9 +1225,14 @@ async function runSelfTests() {
 
   const sampleMd = join(wsDir, 'README.md');
   const sampleDoc = join(wsDir, 'report.docx');
+  const sampleVideo = join(wsDir, 'demo.mp4');
+  const replyVideo = join(wsDir, 'reply.mp4');
+  const videoBytes = Buffer.from(Array.from({ length: 64 }, (_, i) => i));
   const ignoredFile = join(ignoredDir, 'secret.js');
   writeFileSync(sampleMd, '# Hello Sidecar Studio\n', 'utf8');
   writeFileSync(sampleDoc, Buffer.from('PK\x03\x04dummy-docx'));
+  writeFileSync(sampleVideo, videoBytes);
+  writeFileSync(replyVideo, videoBytes);
   writeFileSync(ignoredFile, 'console.log(1);', 'utf8');
 
   const compactSteps = [
@@ -1136,13 +1251,18 @@ async function runSelfTests() {
       status: 'DONE',
       created_at: '2026-11-19T10:00:05Z',
       thinking: '**Drafting report**\nShort thinking preview...',
-      content: 'Created `report.docx`...',
+      content: 'Created `report.docx` and `reply.mp4`...',
       truncated_fields: ['content', 'thinking'],
       tool_calls: [
         {
           id: 'tc-1',
           name: 'write_file',
           args: { Path: JSON.stringify(sampleDoc) },
+        },
+        {
+          id: 'tc-2',
+          name: 'view_file',
+          args: { Path: JSON.stringify(sampleVideo) },
         },
       ],
     },
@@ -1152,7 +1272,7 @@ async function runSelfTests() {
     {
       ...compactSteps[1],
       thinking: '**Drafting report**\nFULL_THINKING_CONTENT_VERIFIED',
-      content: 'FULL_CONTENT_VERIFIED for report.docx',
+      content: 'FULL_CONTENT_VERIFIED for report.docx and `reply.mp4`',
       truncated_fields: undefined,
     },
   ];
@@ -1209,6 +1329,92 @@ async function runSelfTests() {
     assert.match(rImagePreviewer.headers.get('content-type'), /^application\/javascript/);
     assert.match(await rImagePreviewer.text(), /WSModules\.renderImagePreview/);
 
+    assert.ok(homeHtml.includes("media-src 'self' blob:;"), 'CSP must allow local video playback');
+    const videoScript = homeHtml.indexOf('<script src="/previewers/video-viewer.js"></script>');
+    const textScript = homeHtml.indexOf('<script src="/previewers/text-viewer.js"></script>');
+    assert.ok(
+      imageScript < videoScript && videoScript < textScript && textScript < appScript,
+      'video previewer must load after image-viewer.js and before text-viewer.js and app.js'
+    );
+    const rVideoPreviewer = await fetch(`${base}/previewers/video-viewer.js`);
+    assert.equal(rVideoPreviewer.status, 200);
+    assert.match(rVideoPreviewer.headers.get('content-type'), /^application\/javascript/);
+    const videoPreviewerSource = await rVideoPreviewer.text();
+    assert.match(videoPreviewerSource, /WSModules\.renderVideoPreview/);
+
+    // Exercise the real controller against a minimal media API adapter. Source
+    // changes reset playbackRate to defaultPlaybackRate per the HTML standard;
+    // this catches restoration order without adding a browser dependency.
+    {
+      const { runInNewContext } = await import('node:vm');
+      const { setMaxListeners } = await import('node:events');
+      class PreviewNode extends EventTarget {
+        constructor(tagName) {
+          super();
+          this.tagName = tagName.toUpperCase();
+          this.children = [];
+          this.classList = { toggle() {}, remove() {} };
+          this.currentTime = 0;
+          this.duration = 90;
+          this.playbackRate = 1;
+          this.defaultPlaybackRate = 1;
+          this.paused = true;
+          this.videoWidth = 640;
+          this.videoHeight = 360;
+          this.loadCalls = 0;
+        }
+        get options() { return this.children; }
+        get src() { return this.source || ''; }
+        set src(value) {
+          this.source = value;
+          this.playbackRate = this.defaultPlaybackRate;
+        }
+        append(...nodes) { this.children.push(...nodes); }
+        replaceChildren(...nodes) { this.children = nodes; }
+        setAttribute() {}
+        removeAttribute(name) { if (name === 'src') this.source = ''; }
+        focus() {}
+        remove() {}
+        pause() { this.paused = true; }
+        load() { this.loadCalls += 1; }
+      }
+      class PreviewAbortController extends AbortController {
+        constructor() { super(); setMaxListeners(0, this.signal); }
+      }
+      let videoNode, cleanup;
+      const previewGlobal = {};
+      runInNewContext(videoPreviewerSource, {
+        window: previewGlobal,
+        document: { createElement: (tag) => {
+          const node = new PreviewNode(tag);
+          if (tag === 'video') videoNode = node;
+          return node;
+        } },
+        URLSearchParams,
+        AbortController: PreviewAbortController,
+      });
+      const controller = await previewGlobal.WSModules.renderVideoPreview({
+        file: { path: '/fixtures/demo.mp4', name: 'demo.mp4', size: 64, mtimeMs: 1234 },
+        stageEl: new PreviewNode('div'), toolbarEl: new PreviewNode('div'),
+        getWorkspaceGen: () => 7,
+        prevState: { currentTime: 125, playbackRate: 1.5, muted: true, loop: true },
+        registerCleanup: (fn) => { cleanup = fn; },
+      });
+      assert.equal(controller.getState().playbackRate, 1.5, 'loading src must preserve the saved playback rate');
+      const streamQuery = new URL(videoNode.src, 'http://127.0.0.1').searchParams;
+      assert.equal(streamQuery.get('path'), '/fixtures/demo.mp4');
+      assert.equal(streamQuery.get('workspaceGen'), '7');
+      assert.equal(streamQuery.get('v'), '1234');
+      videoNode.dispatchEvent(new Event('loadedmetadata'));
+      assert.equal(controller.getState().currentTime, 90, 'saved position is clamped to the new duration');
+      assert.equal(controller.getState().muted, true);
+      assert.equal(controller.getState().loop, true);
+      cleanup();
+      controller.destroy();
+      assert.equal(videoNode.src, '', 'cleanup releases the media URL');
+      assert.equal(videoNode.loadCalls, 1, 'cleanup is idempotent');
+    }
+
     const rPreload = await fetch(`${base}/preload.js`);
     assert.equal(rPreload.status, 200);
 
@@ -1246,6 +1452,7 @@ async function runSelfTests() {
     assert.equal(rTree.status, 200);
     const treeJson = await rTree.json();
     assert.ok(treeJson.items.some((i) => i.name === 'README.md'));
+    assert.ok(treeJson.items.some((i) => i.name === 'demo.mp4' && i.category === 'video'));
     assert.ok(!treeJson.items.some((i) => i.name === 'node_modules'));
 
     const rSearch = await fetch(
@@ -1265,6 +1472,117 @@ async function runSelfTests() {
     const rRawDeny = await fetch(`${base}/api/file/raw?path=${encodeURIComponent(escapePath)}`);
     assert.equal(rRawDeny.status, 403);
 
+    // 6a. MP4 streaming: full bodies, HEAD, byte ranges, and security boundaries.
+    const streamUrl = `${base}/api/file/stream?path=${encodeURIComponent(sampleVideo)}`;
+    const rVideo = await fetch(streamUrl);
+    assert.equal(rVideo.status, 200);
+    assert.equal(rVideo.headers.get('content-type'), 'video/mp4');
+    assert.equal(rVideo.headers.get('accept-ranges'), 'bytes');
+    assert.equal(rVideo.headers.get('content-length'), '64');
+    assert.equal(rVideo.headers.get('cache-control'), 'no-store');
+    assert.equal(rVideo.headers.get('content-security-policy'), "default-src 'none'; sandbox");
+    assert.equal(rVideo.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(rVideo.headers.get('x-file-size'), '64');
+    assert.equal(rVideo.headers.get('x-file-mtime'), String(statSync(sampleVideo).mtimeMs));
+    assert.ok(rVideo.headers.get('x-file-version'));
+    assert.deepEqual(Buffer.from(await rVideo.arrayBuffer()), videoBytes);
+
+    const rVideoHead = await fetch(streamUrl, { method: 'HEAD' });
+    assert.equal(rVideoHead.status, 200);
+    assert.equal(rVideoHead.headers.get('content-length'), '64');
+    assert.equal((await rVideoHead.arrayBuffer()).byteLength, 0);
+
+    for (const [range, expectedRange, expectedBytes] of [
+      ['bytes=0-9', 'bytes 0-9/64', videoBytes.subarray(0, 10)],
+      ['bytes=-8', 'bytes 56-63/64', videoBytes.subarray(56)],
+      ['bytes=60-', 'bytes 60-63/64', videoBytes.subarray(60)],
+      ['bytes=60-999', 'bytes 60-63/64', videoBytes.subarray(60)],
+      ['bytes=-999', 'bytes 0-63/64', videoBytes],
+      ['  BYTES=0-0  ', 'bytes 0-0/64', videoBytes.subarray(0, 1)],
+    ]) {
+      const response = await fetch(streamUrl, { headers: { Range: range } });
+      assert.equal(response.status, 206, range);
+      assert.equal(response.headers.get('content-range'), expectedRange, range);
+      assert.equal(response.headers.get('content-length'), String(expectedBytes.length), range);
+      assert.deepEqual(Buffer.from(await response.arrayBuffer()), expectedBytes, range);
+    }
+
+    const rVideoHeadRange = await fetch(streamUrl, { method: 'HEAD', headers: { Range: 'bytes=0-9' } });
+    assert.equal(rVideoHeadRange.status, 206);
+    assert.equal(rVideoHeadRange.headers.get('content-range'), 'bytes 0-9/64');
+    assert.equal(rVideoHeadRange.headers.get('content-length'), '10');
+    assert.equal((await rVideoHeadRange.arrayBuffer()).byteLength, 0);
+
+    for (const range of [
+      'bytes=99999-', 'bytes=10-9', 'bytes=-0', 'bytes=-', 'bytes=0-1,4-5',
+      'items=0-9', 'bytes=abc-9', 'bytes=9007199254740992-', 'bytes=-9007199254740992',
+    ]) {
+      const response = await fetch(streamUrl, { headers: { Range: range } });
+      assert.equal(response.status, 416, range);
+      assert.equal(response.headers.get('content-range'), 'bytes */64', range);
+      assert.deepEqual(await response.json(), { success: false, error: 'Range Not Satisfiable' }, range);
+    }
+    const rVideoHeadInvalid = await fetch(streamUrl, { method: 'HEAD', headers: { Range: 'bytes=99999-' } });
+    assert.equal(rVideoHeadInvalid.status, 416);
+    assert.equal(rVideoHeadInvalid.headers.get('content-range'), 'bytes */64');
+    assert.equal((await rVideoHeadInvalid.arrayBuffer()).byteLength, 0);
+
+    const emptyVideo = join(wsDir, 'empty.MP4');
+    writeFileSync(emptyVideo, Buffer.alloc(0));
+    const emptyStreamUrl = `${base}/api/file/stream?path=${encodeURIComponent(emptyVideo)}`;
+    const rVideoEmpty = await fetch(emptyStreamUrl);
+    assert.equal(rVideoEmpty.status, 200);
+    assert.equal(rVideoEmpty.headers.get('content-type'), 'video/mp4');
+    assert.equal(rVideoEmpty.headers.get('content-length'), '0');
+    assert.equal((await rVideoEmpty.arrayBuffer()).byteLength, 0);
+    const rVideoEmptyRange = await fetch(emptyStreamUrl, { headers: { Range: 'bytes=0-' } });
+    assert.equal(rVideoEmptyRange.status, 416);
+    assert.equal(rVideoEmptyRange.headers.get('content-range'), 'bytes */0');
+    await rVideoEmptyRange.arrayBuffer();
+
+    // Files above /api/file/raw's 128 MiB cap remain streamable without buffering.
+    const largeVideo = join(wsDir, 'large.mp4');
+    writeFileSync(largeVideo, Buffer.alloc(0));
+    truncateSync(largeVideo, 129 * 1024 * 1024);
+    const largeStreamUrl = `${base}/api/file/stream?path=${encodeURIComponent(largeVideo)}`;
+    const rVideoLargeHead = await fetch(largeStreamUrl, { method: 'HEAD' });
+    assert.equal(rVideoLargeHead.status, 200);
+    assert.equal(rVideoLargeHead.headers.get('content-length'), '135266304');
+    assert.equal((await rVideoLargeHead.arrayBuffer()).byteLength, 0);
+    const rVideoLargeTail = await fetch(largeStreamUrl, { headers: { Range: 'bytes=135266303-' } });
+    assert.equal(rVideoLargeTail.status, 206);
+    assert.equal(rVideoLargeTail.headers.get('content-range'), 'bytes 135266303-135266303/135266304');
+    assert.deepEqual(Buffer.from(await rVideoLargeTail.arrayBuffer()), Buffer.from([0]));
+
+    for (const [path, expectedStatus] of [[sampleMd, 415], [escapePath, 403], [join(wsDir, 'missing.mp4'), 404]]) {
+      for (const method of ['GET', 'HEAD']) {
+        const response = await fetch(`${base}/api/file/stream?path=${encodeURIComponent(path)}`, { method });
+        assert.equal(response.status, expectedStatus, `${method} ${path}`);
+        const body = await response.arrayBuffer();
+        if (method === 'HEAD') assert.equal(body.byteLength, 0);
+        else assert.equal(JSON.parse(Buffer.from(body).toString()).success, false);
+      }
+    }
+    const rVideoStale = await fetch(`${streamUrl}&workspaceGen=0`);
+    assert.equal(rVideoStale.status, 409);
+    await rVideoStale.arrayBuffer();
+
+    const brainVideo = join(appDataDir, 'brain', convId, 'clip.mp4');
+    writeFileSync(brainVideo, videoBytes);
+    const rBrainVideo = await fetch(`${base}/api/file/stream?path=${encodeURIComponent(brainVideo)}`);
+    assert.equal(rBrainVideo.status, 200);
+    assert.deepEqual(Buffer.from(await rBrainVideo.arrayBuffer()), videoBytes);
+    const otherVideoConvId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
+    const otherVideoDir = join(appDataDir, 'brain', otherVideoConvId);
+    mkdirSync(otherVideoDir, { recursive: true });
+    const otherVideo = join(otherVideoDir, 'clip.mp4');
+    writeFileSync(otherVideo, videoBytes);
+    const rOtherVideo = await fetch(
+      `${base}/api/file/stream?path=${encodeURIComponent(otherVideo)}&conversationId=${otherVideoConvId}`
+    );
+    assert.equal(rOtherVideo.status, 403, 'query parameters cannot select a different conversation');
+    await rOtherVideo.arrayBuffer();
+
     const sysHosts = 'C:\\Windows\\System32\\drivers\\etc\\hosts';
     if (existsSync(sysHosts)) {
       const rSysDeny = await fetch(`${base}/api/file/raw?path=${encodeURIComponent(sysHosts)}`);
@@ -1282,6 +1600,9 @@ async function runSelfTests() {
     const trJson = await rTr.json();
     assert.equal(trJson.steps.length, 2);
     assert.equal(trJson.steps[1].hasFull, true);
+    for (const name of ['demo.mp4', 'reply.mp4']) {
+      assert.ok(trJson.steps[1].files.some((file) => file.name === name && file.category === 'video' && file.isDoc));
+    }
 
     const rFull = await fetch(
       `${base}/api/transcript/full?conversationId=${encodeURIComponent(convId)}&stepIndex=1`
@@ -1297,6 +1618,9 @@ async function runSelfTests() {
     assert.equal(rProd.status, 200);
     const prodJson = await rProd.json();
     assert.ok(prodJson.docs.some((d) => d.name === 'report.docx'));
+    for (const name of ['demo.mp4', 'reply.mp4', 'clip.mp4']) {
+      assert.ok(prodJson.docs.some((file) => file.name === name && file.category === 'video' && file.isDoc));
+    }
 
     // 8. POST /api/file/save (auth, traversal, optimistic conflict, UTF-8 & Base64 atomic save)
     const rSaveUnauth = await fetch(`${base}/api/file/save`, {

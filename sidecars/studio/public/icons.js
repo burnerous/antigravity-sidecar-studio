@@ -16,6 +16,7 @@
     'code-json',
     'code',
     'image',
+    'video',
     'other',
   ]);
 
@@ -85,6 +86,10 @@
       <linearGradient id="wsg-image" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0%" stop-color="#A78BFA"/>
         <stop offset="100%" stop-color="#4F46E5"/>
+      </linearGradient>
+      <linearGradient id="wsg-video" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#FB7185"/>
+        <stop offset="100%" stop-color="#E11D48"/>
       </linearGradient>
       <linearGradient id="wsg-other" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0%" stop-color="#94A3B8"/>
@@ -218,6 +223,12 @@
       <rect x="1.5" y="1.5" width="21" height="21" rx="5.5" fill="none" stroke="rgba(255,255,255,0.28)" stroke-width="0.75"/>
       <circle cx="8.6" cy="8.7" r="1.8" fill="#FDE68A"/>
       <path d="M5.4 17.4l4.1-4.6 2.9 3 2.3-2.3 3.9 3.9z" fill="#FFFFFF" fill-opacity="0.95"/>
+    </symbol>
+
+    <symbol id="wsi-video" viewBox="0 0 24 24">
+      <rect x="1.5" y="1.5" width="21" height="21" rx="5.5" fill="url(#wsg-video)"/>
+      <rect x="1.5" y="1.5" width="21" height="21" rx="5.5" fill="none" stroke="rgba(255,255,255,0.28)" stroke-width="0.75"/>
+      <path d="M9 7.4c0-.77.84-1.25 1.5-.86l6.4 4.6c.6.4.6 1.32 0 1.72l-6.4 4.6c-.66.39-1.5-.09-1.5-.86V7.4z" fill="#FFFFFF"/>
     </symbol>
 
     <symbol id="wsi-other" viewBox="0 0 24 24">
@@ -382,6 +393,7 @@
     if (cat === 'pdf' || ext === '.pdf') return 'pdf';
     if (cat === 'markdown' || ext === '.md' || ext === '.mdx' || ext === '.markdown') return 'markdown';
     if (cat === 'image') return 'image';
+    if (cat === 'video' || ext === '.mp4') return 'video';
     if (ext === '.py') return 'code-py';
     if (ext === '.html' || ext === '.htm') return 'code-html';
     if (ext === '.json' || ext === '.jsonl' || ext === '.yaml' || ext === '.yml' || ext === '.toml') {

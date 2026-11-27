@@ -24,6 +24,7 @@ export const DEFAULT_IGNORED_NAMES = new Set([
 const OFFICE_TEMP_RE = /^~\$/;
 
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.ico']);
+const VIDEO_EXTS = new Set(['.mp4']);
 const CODE_EXTS = new Set([
   '.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.py', '.json', '.jsonl',
   '.html', '.htm', '.css', '.scss', '.less', '.xml', '.yaml', '.yml',
@@ -40,6 +41,7 @@ export function classifyFile(filename) {
   if (ext === '.pdf') return 'pdf';
   if (ext === '.md' || ext === '.mdx' || ext === '.markdown') return 'markdown';
   if (IMAGE_EXTS.has(ext)) return 'image';
+  if (VIDEO_EXTS.has(ext)) return 'video';
   if (CODE_EXTS.has(ext) || !ext) return 'code';
   return 'other';
 }
