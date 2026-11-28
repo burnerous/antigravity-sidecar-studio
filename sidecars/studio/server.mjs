@@ -1474,6 +1474,313 @@ async function runSelfTests() {
       assert.equal(videoNode.loadCalls, 1, 'cleanup is idempotent');
     }
 
+    const prismMotionScript = homeHtml.indexOf('<script src="/prism-motion.js"></script>');
+    const trajectoryScript = homeHtml.indexOf('<script src="/trajectory-view.js"></script>');
+    assert.ok(
+      prismMotionScript >= 0 && textScript < prismMotionScript
+        && prismMotionScript < trajectoryScript && prismMotionScript < appScript,
+      'prism-motion.js must load after text-viewer.js and before trajectory-view.js and app.js'
+    );
+    const rPrismMotion = await fetch(`${base}/prism-motion.js`);
+    assert.equal(rPrismMotion.status, 200);
+    assert.match(rPrismMotion.headers.get('content-type'), /^application\/javascript/);
+    const prismMotionSource = await rPrismMotion.text();
+    assert.match(prismMotionSource, /WSPrismMotion/);
+
+    const rPrismCss = await fetch(`${base}/themes/obsidian-prism.css`);
+    assert.equal(rPrismCss.status, 200);
+    assert.match(rPrismCss.headers.get('content-type'), /^text\/css/);
+    const prismCss = await rPrismCss.text();
+    for (const marker of [
+      '.ws-prism-indicator',
+      '.ws-prism-indicator.is-gliding .ws-prism-indicator-pill',
+      '.is-prism-closing',
+      'wsPrismRefreshSpin',
+      '[data-motion="reduced"]',
+    ]) {
+      assert.ok(prismCss.includes(marker), `obsidian-prism.css must include ${marker}`);
+    }
+
+    // Exercise the served controller with Node events and timers in a minimal DOM.
+    {
+      const { runInNewContext } = await import('node:vm');
+      class PrismNode extends EventTarget {
+        constructor() {
+          super();
+          const classes = new Set();
+          this.classList = {
+            add: (name) => classes.add(name),
+            remove: (name) => classes.delete(name),
+            contains: (name) => classes.has(name),
+          };
+          this.dataset = {};
+          this.style = {};
+        }
+        setAttribute() {}
+        removeAttribute() {}
+      }
+      const documentElement = new PrismNode();
+      const pendingTimers = new Set();
+      const prismWindow = {
+        document: { documentElement, body: new PrismNode() },
+        matchMedia: () => ({ matches: false }),
+        setTimeout(callback, delay) {
+          const timer = setTimeout(() => {
+            pendingTimers.delete(timer);
+            callback();
+          }, delay);
+          pendingTimers.add(timer);
+          return timer;
+        },
+        clearTimeout(timer) {
+          pendingTimers.delete(timer);
+          clearTimeout(timer);
+        },
+      };
+      const assertOverlayState = (overlay, expected, message) => {
+        assert.deepEqual({
+          closing: overlay.classList.contains('is-prism-closing'),
+          hidden: overlay.classList.contains('is-hidden'),
+        }, expected, message);
+      };
+      runInNewContext(prismMotionSource, { window: prismWindow });
+      const api = prismWindow.WSPrismMotion;
+      assert.ok(api, 'prism-motion.js must expose window.WSPrismMotion');
+      try {
+        for (const [skin, motion, prismActive, motionEnabled] of [
+          ['default', 'full', false, false],
+          ['prism', 'full', true, true],
+          ['prism', 'reduced', true, false],
+        ]) {
+          Object.assign(documentElement.dataset, { skin, motion });
+          const setting = `${skin} skin with ${motion} motion`;
+          assert.equal(api.isPrismActive(), prismActive, `Prism activation for ${setting}`);
+          assert.equal(api.isMotionEnabled(), motionEnabled, `Motion enabled for ${setting}`);
+
+          if (!motionEnabled) {
+            const overlay = new PrismNode();
+            let doneCalls = 0;
+            api.closeOverlay(overlay, { onDone: () => { doneCalls++; } });
+            assertOverlayState(overlay, { closing: false, hidden: true }, `Overlay must hide synchronously with ${setting}`);
+            assert.equal(doneCalls, 1, `onDone must run synchronously with ${setting}`);
+          }
+        }
+
+        Object.assign(documentElement.dataset, { skin: 'prism', motion: 'full' });
+        const animatedOverlay = new PrismNode();
+        let animatedDoneCalls = 0;
+        api.closeOverlay(animatedOverlay, { onDone: () => { animatedDoneCalls++; } });
+        assertOverlayState(animatedOverlay, { closing: true, hidden: false }, 'Overlay must stay visible while closing');
+        assert.equal(animatedDoneCalls, 0, 'onDone must wait for the exit animation');
+        animatedOverlay.dispatchEvent(new Event('animationend'));
+        assertOverlayState(animatedOverlay, { closing: false, hidden: true }, 'animationend must finish the overlay exit');
+        assert.equal(animatedDoneCalls, 1, 'animationend must call onDone once');
+
+        const repeatedOverlay = new PrismNode();
+        api.closeOverlay(repeatedOverlay);
+        assert.equal(pendingTimers.size, 1, 'Closing must schedule one fallback timer');
+        const [exitTimer] = pendingTimers;
+        api.closeOverlay(repeatedOverlay);
+        assert.deepEqual([...pendingTimers], [exitTimer], 'Repeated close must keep the original fallback timer');
+        assertOverlayState(repeatedOverlay, { closing: true, hidden: false }, 'Repeated close must leave the exit in progress');
+
+        const reopenedOverlay = new PrismNode();
+        let cancelledDoneCalls = 0;
+        api.closeOverlay(reopenedOverlay, { onDone: () => { cancelledDoneCalls++; } });
+        assertOverlayState(reopenedOverlay, { closing: true, hidden: false }, 'Overlay must be closing before reopening');
+        api.openOverlay(reopenedOverlay);
+        assertOverlayState(reopenedOverlay, { closing: false, hidden: false }, 'Reopening must clear both classes immediately');
+        assert.equal(cancelledDoneCalls, 0, 'Reopening must not call onDone');
+
+        await new Promise((resolve) => setTimeout(resolve, 250));
+        assertOverlayState(reopenedOverlay, { closing: false, hidden: false }, 'Reopened overlay must stay visible after the fallback');
+        assert.equal(cancelledDoneCalls, 0, 'Cancelled exit must not call onDone after the fallback');
+        assertOverlayState(repeatedOverlay, { closing: false, hidden: true }, 'One fallback must finish the repeated close');
+        assert.equal(animatedDoneCalls, 1, 'The fallback must not repeat a completed exit callback');
+
+        api.closeOverlay(new PrismNode());
+      } finally {
+        try {
+          api.destroy();
+          assert.equal(pendingTimers.size, 0, 'Destroy must cancel pending Prism motion timers');
+        } finally {
+          for (const timer of pendingTimers) clearTimeout(timer);
+        }
+      }
+    }
+
+    const holdConfirmScript = homeHtml.indexOf('<script src="/hold-confirm.js"></script>');
+    assert.ok(
+      prismMotionScript < holdConfirmScript && holdConfirmScript < trajectoryScript && holdConfirmScript < appScript,
+      'hold-confirm.js must load after prism-motion.js and before trajectory-view.js and app.js'
+    );
+    assert.match(homeHtml, /id="closeAllTabsWrap"/);
+    assert.match(homeHtml, /id="closeAllHoldHint"/);
+
+    const rHoldConfirm = await fetch(`${base}/hold-confirm.js`);
+    assert.equal(rHoldConfirm.status, 200);
+    assert.match(rHoldConfirm.headers.get('content-type'), /^application\/javascript/);
+    const holdConfirmSource = await rHoldConfirm.text();
+    assert.match(holdConfirmSource, /bindHoldConfirm/);
+    assert.match(holdConfirmSource, /Copyright \(c\) 2026 guanmo-ai/);
+
+    const rStyles = await fetch(`${base}/styles.css`);
+    assert.equal(rStyles.status, 200);
+    assert.match(rStyles.headers.get('content-type'), /^text\/css/);
+    const stylesSource = await rStyles.text();
+    for (const marker of ['is-tree-resizing', 'margin-left: calc(-1 * clamp', '.ws-hold-btn', '.ws-hold-check']) {
+      assert.ok(stylesSource.includes(marker), `styles.css must include ${marker}`);
+    }
+
+    // A virtual clock and reduced motion make hold thresholds and timer cleanup deterministic.
+    {
+      const { runInNewContext } = await import('node:vm');
+      class HoldNode extends EventTarget {
+        attributes = new Map();
+        getAttribute(name) { return this.attributes.get(name) ?? null; }
+        setAttribute(name, value) { this.attributes.set(name, value); }
+        removeAttribute(name) { this.attributes.delete(name); }
+      }
+      const duration = 1100;
+      const tapThreshold = 240;
+      const hintDuration = 1400;
+      const doneDuration = 720;
+      const fill = { style: {} };
+      const button = new HoldNode();
+      const hintEl = new HoldNode();
+      button.disabled = false;
+      button.querySelector = (selector) => selector === '.ws-hold-fill' ? fill : null;
+      button.setAttribute('aria-label', 'Hold to close all tabs');
+
+      let time = 0;
+      let nextTimerId = 0;
+      const pendingTimers = new Map();
+      const holdWindow = Object.assign(new EventTarget(), {
+        document: new EventTarget(),
+        matchMedia: () => ({ matches: true }),
+        performance: { now: () => time },
+        setTimeout(callback, delay) {
+          const id = ++nextTimerId;
+          pendingTimers.set(id, { callback, at: time + delay });
+          return id;
+        },
+        clearTimeout(id) { pendingTimers.delete(id); },
+      });
+      async function advance(ms) {
+        const end = time + ms;
+        for (;;) {
+          const next = [...pendingTimers].sort(([, a], [, b]) => a.at - b.at)[0];
+          if (!next || next[1].at > end) break;
+          const [id, { callback, at }] = next;
+          time = at;
+          pendingTimers.delete(id);
+          await callback();
+        }
+        time = end;
+      }
+      const dispatch = (target, type, props) =>
+        target.dispatchEvent(Object.assign(new Event(type, { cancelable: true }), props));
+      const pointer = (type) => dispatch(button, type, { button: 0, isPrimary: true, pointerId: 1, pointerType: 'mouse' });
+      const keyEvent = (type, key, repeat = false) => dispatch(button, type, { key, repeat });
+
+      runInNewContext(holdConfirmSource, { window: holdWindow });
+      let allowed = true;
+      let confirmCalls = 0;
+      let doneEndCalls = 0;
+      const bind = () => holdWindow.WSModules.bindHoldConfirm({
+        button, hintEl, duration, tapThreshold, hintDuration, doneDuration,
+        onBeforeConfirm: async () => allowed,
+        onConfirm: async () => { confirmCalls++; },
+        onDoneEnd: () => { doneEndCalls++; },
+      });
+      const hold = bind();
+
+      pointer('pointerdown');
+      await advance(tapThreshold - 1);
+      pointer('pointerup');
+      assert.equal(hintEl.getAttribute('data-show'), '', 'A short tap must reveal the hold hint');
+      assert.equal(dispatch(button, 'click'), false, 'A short tap must suppress the native click');
+      assert.equal(confirmCalls, 0, 'A short tap must not confirm');
+      await advance(hintDuration);
+      assert.equal(hintEl.getAttribute('data-show'), null, 'The short-tap hint must expire');
+
+      pointer('pointerdown');
+      await advance(tapThreshold);
+      pointer('pointerup');
+      assert.equal(button.getAttribute('data-holding'), null, 'Early release must clear the holding state');
+      assert.equal(fill.style.scale, '0 1', 'Early release must reset the progress fill');
+      assert.equal(hintEl.getAttribute('data-show'), null, 'Release at the tap threshold must not show a hint');
+      await advance(duration);
+      assert.equal(confirmCalls, 0, 'Early release must cancel confirmation');
+
+      pointer('pointerdown');
+      await advance(duration);
+      assert.equal(button.getAttribute('data-done'), '', 'A full hold must mark the button done');
+      assert.equal(hold.isDone(), true, 'The app must be able to observe the done state');
+      assert.equal(confirmCalls, 1, 'A full hold must confirm once');
+      pointer('pointerup');
+      await advance(doneDuration - 1);
+      assert.equal(button.getAttribute('data-done'), '', 'The done state must persist for the configured duration');
+      assert.equal(doneEndCalls, 0, 'onDoneEnd must wait for the done state to expire');
+      await advance(1);
+      assert.equal(button.getAttribute('data-done'), null, 'The done state must clear at the end of its duration');
+      assert.equal(hold.isDone(), false);
+      assert.equal(doneEndCalls, 1, 'onDoneEnd must fire once after the done state');
+      assert.equal(button.getAttribute('aria-label'), 'Hold to close all tabs');
+
+      for (const key of [' ', 'Enter']) {
+        const before = confirmCalls;
+        keyEvent('keydown', key, true);
+        assert.equal(hold.isHolding(), false, 'A repeated keydown must not start a hold');
+        keyEvent('keydown', key);
+        assert.equal(hold.isHolding(), true, `${JSON.stringify(key)} must start a keyboard hold`);
+        await advance(duration - 1);
+        assert.equal(confirmCalls, before, 'Keyboard confirmation must wait for a full hold');
+        keyEvent('keydown', key, true);
+        await advance(1);
+        assert.equal(confirmCalls, before + 1, 'Key repeat must not restart the hold timer');
+        assert.equal(button.getAttribute('data-done'), '');
+        keyEvent('keyup', key);
+        await advance(doneDuration);
+      }
+
+      for (const target of [button, holdWindow]) {
+        keyEvent('keydown', ' ');
+        await advance(tapThreshold);
+        dispatch(target, 'blur');
+        assert.equal(button.getAttribute('data-holding'), null, 'Blur must clear the holding state');
+        assert.equal(fill.style.scale, '0 1', 'Blur must reset the progress fill');
+        await advance(duration);
+        assert.equal(confirmCalls, 3, 'Blur must cancel confirmation');
+      }
+
+      allowed = false;
+      pointer('pointerdown');
+      await advance(duration);
+      assert.equal(button.getAttribute('data-done'), null, 'Declined confirmation must not enter the done state');
+      assert.equal(confirmCalls, 3, 'Declined confirmation must not call onConfirm');
+      assert.equal(fill.style.scale, '0 1', 'Declined confirmation must reset the progress fill');
+      hold.destroy();
+
+      allowed = true;
+      for (const [phase, elapsed] of [['hold', 0], ['hint', tapThreshold - 1], ['done', duration]]) {
+        const controller = bind();
+        pointer('pointerdown');
+        await advance(elapsed);
+        if (phase === 'hint') pointer('pointerup');
+        assert.equal(pendingTimers.size, 1, `The ${phase} timer must be pending before destruction`);
+        const before = [confirmCalls, doneEndCalls];
+        controller.destroy();
+        assert.equal(pendingTimers.size, 0, `Destroy must clear the ${phase} timer`);
+        assert.equal(button.getAttribute('data-holding'), null);
+        assert.equal(button.getAttribute('data-done'), null);
+        assert.equal(hintEl.getAttribute('data-show'), null);
+        pointer('pointerdown');
+        await advance(duration + hintDuration + doneDuration);
+        assert.deepEqual([confirmCalls, doneEndCalls], before, 'Destroy must disable further hold callbacks');
+      }
+    }
+
     const rPreload = await fetch(`${base}/preload.js`);
     assert.equal(rPreload.status, 200);
 

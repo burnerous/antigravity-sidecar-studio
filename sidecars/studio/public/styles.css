@@ -268,7 +268,7 @@ input::placeholder, textarea::placeholder {
   flex-shrink: 0;
 }
 
-.ws-chip-btn.ws-chip-danger:hover:not(:disabled) {
+.ws-chip-btn.ws-chip-danger:hover:not(:disabled, [data-holding], [data-done]) {
   color: var(--ws-danger);
   border-color: color-mix(in srgb, var(--ws-danger) 48%, var(--ws-border));
   background: color-mix(in srgb, var(--ws-danger) 12%, transparent);
@@ -277,6 +277,129 @@ input::placeholder, textarea::placeholder {
 .ws-chip-btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+/* Hold-to-confirm close-all button */
+.ws-hold-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.ws-hold-btn {
+  position: relative;
+  justify-content: center;
+  width: 80px;
+  height: 23px;
+  padding: 0;
+  overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: manipulation;
+  transition:
+    width 550ms cubic-bezier(0.3, 1.45, 0.5, 1),
+    transform 250ms cubic-bezier(0.3, 1.45, 0.5, 1),
+    background-color 240ms ease,
+    border-color 240ms ease,
+    color 240ms ease,
+    box-shadow 240ms ease;
+}
+
+.ws-hold-btn:focus-visible {
+  outline: 2px solid var(--ws-danger);
+  outline-offset: 2px;
+}
+
+.ws-hold-btn[data-holding] {
+  transform: scale(0.955);
+  color: var(--ws-danger);
+  border-color: color-mix(in srgb, var(--ws-danger) 62%, var(--ws-border));
+}
+
+.ws-hold-fill {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: color-mix(in srgb, var(--ws-danger) 24%, transparent);
+  transform-origin: left center;
+  scale: 0 1;
+  pointer-events: none;
+  transition: opacity 200ms ease;
+}
+
+.ws-hold-label {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  white-space: nowrap;
+  pointer-events: none;
+  transition: opacity 200ms ease, filter 200ms ease;
+}
+
+.ws-hold-check {
+  position: absolute;
+  z-index: 2;
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 24;
+  stroke-dashoffset: 24;
+  pointer-events: none;
+  transition: stroke-dashoffset 360ms cubic-bezier(0.16, 1, 0.3, 1) 120ms;
+}
+
+.ws-hold-btn[data-done] {
+  width: 23px;
+  background: var(--ws-danger);
+  border-color: var(--ws-danger);
+  color: #ffffff;
+  cursor: default;
+  transform: none;
+}
+
+.ws-hold-btn[data-done] .ws-hold-label {
+  opacity: 0;
+  filter: blur(3px);
+}
+
+.ws-hold-btn[data-done] .ws-hold-fill {
+  opacity: 0;
+}
+
+.ws-hold-btn[data-done] .ws-hold-check {
+  stroke-dashoffset: 0;
+}
+
+.ws-hold-hint {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 76;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--ws-border-strong);
+  background: var(--ws-surface);
+  color: var(--ws-fg);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.28);
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateY(-3px);
+  transition: opacity 180ms ease, transform 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.ws-hold-hint[data-show] {
+  opacity: 1;
+  transform: translateY(0);
 }
 
 /* Produced Docs Strip */
@@ -525,20 +648,35 @@ input::placeholder, textarea::placeholder {
 }
 
 .ws-tree-pane {
-  width: var(--ws-tree-width, 215px);
-  min-width: 150px;
-  max-width: 460px;
+  width: clamp(150px, var(--ws-tree-width, 215px), 460px);
+  flex: 0 0 clamp(150px, var(--ws-tree-width, 215px), 460px);
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--ws-border);
   background: var(--ws-surface);
-  flex-shrink: 0;
   z-index: 20;
+  margin-left: 0;
+  transform: translateX(0);
+  opacity: 1;
+  visibility: visible;
+  transition:
+    margin-left 220ms cubic-bezier(0.16, 1, 0.3, 1),
+    transform 220ms cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 180ms ease,
+    visibility 0s linear 0s;
 }
 
-.ws-workbench.is-tree-collapsed .ws-tree-pane,
-.ws-workbench.is-tree-collapsed .ws-splitter {
-  display: none;
+.ws-workbench.is-tree-collapsed .ws-tree-pane {
+  margin-left: calc(-1 * clamp(150px, var(--ws-tree-width, 215px), 460px));
+  transform: translateX(-12px);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    margin-left 220ms cubic-bezier(0.16, 1, 0.3, 1),
+    transform 220ms cubic-bezier(0.16, 1, 0.3, 1),
+    opacity 160ms ease,
+    visibility 0s linear 220ms;
 }
 
 .ws-splitter {
@@ -546,7 +684,16 @@ input::placeholder, textarea::placeholder {
   cursor: col-resize;
   background: transparent;
   flex-shrink: 0;
-  transition: background 0.15s;
+  overflow: hidden;
+  opacity: 1;
+  /* Keep the width and fade transitions when the optional skin is active. */
+  transition: width 200ms cubic-bezier(0.16, 1, 0.3, 1), opacity 160ms ease, background 0.15s !important;
+}
+
+.ws-workbench.is-tree-collapsed .ws-splitter {
+  width: 0;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .ws-splitter:hover, .ws-splitter.is-dragging {
@@ -563,26 +710,57 @@ input::placeholder, textarea::placeholder {
     top: 0;
     bottom: 0;
     left: 0;
+    margin-left: 0 !important;
+    flex: none;
     width: min(290px, 84vw);
     box-shadow: 8px 0 28px rgba(0, 0, 0, 0.38);
     transform: translateX(0);
-    transition: transform 0.2s ease;
+    opacity: 1;
+    visibility: visible;
+    /* Keep the delayed visibility change across skins. */
+    transition:
+      transform 220ms cubic-bezier(0.16, 1, 0.3, 1),
+      opacity 180ms ease,
+      visibility 0s linear 0s !important;
   }
   .ws-splitter {
     display: none;
   }
   .ws-workbench.is-tree-collapsed .ws-tree-pane {
-    display: flex;
+    margin-left: 0 !important;
     transform: translateX(-105%);
+    opacity: 0;
+    visibility: hidden;
     pointer-events: none;
+    transition:
+      transform 220ms cubic-bezier(0.16, 1, 0.3, 1),
+      opacity 160ms ease,
+      visibility 0s linear 220ms !important;
   }
-  .ws-workbench:not(.is-tree-collapsed) .ws-drawer-backdrop {
+  .ws-drawer-backdrop {
     display: block;
     position: absolute;
     inset: 0;
     background: rgba(0, 0, 0, 0.42);
     z-index: 15;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity 200ms ease, visibility 0s linear 200ms;
   }
+  .ws-workbench:not(.is-tree-collapsed) .ws-drawer-backdrop {
+    opacity: 1;
+    visibility: visible;
+    pointer-events: auto;
+    transition: opacity 200ms ease, visibility 0s linear 0s;
+  }
+}
+
+.ws-workbench.is-tree-resizing .ws-tree-pane,
+.ws-workbench.is-tree-resizing .ws-splitter,
+.ws-workbench:has(> .ws-splitter.is-dragging) .ws-tree-pane,
+.ws-splitter.is-dragging {
+  transition: none !important;
 }
 
 .ws-tree-toolbar {
@@ -2374,6 +2552,14 @@ button.ws-md-empty:focus-visible {
 
 @media (prefers-reduced-motion: reduce) {
   .ws-staged-btn.is-pulse { animation: none; }
+
+  #ws-app :is(
+    .ws-tree-pane, .ws-splitter, .ws-drawer-backdrop,
+    .ws-hold-btn, .ws-hold-fill, .ws-hold-label, .ws-hold-check, .ws-hold-hint
+  ) {
+    transition-duration: 0s !important;
+    transition-delay: 0s !important;
+  }
 }
 
 @media (max-width: 440px) {

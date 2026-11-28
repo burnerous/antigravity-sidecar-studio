@@ -2,13 +2,21 @@
 :root[data-skin="prism"] {
   --ws-paper-bg: #ffffff;
   --ws-paper-fg: #1e293b;
-  --prism-ease-spring: cubic-bezier(0.22, 1.24, 0.36, 1);
+  --prism-ease-spring: cubic-bezier(0.3, 1.38, 0.5, 1);
+  --prism-ease-glide: cubic-bezier(0.24, 1.18, 0.36, 1);
   --prism-ease-smooth: cubic-bezier(0.16, 1, 0.3, 1);
-  --prism-dur-fast: 150ms;
+  --prism-ease-press: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --prism-ease-return: cubic-bezier(0.2, 0.9, 0.34, 1.16);
+  --prism-dur-press: 45ms;
+  --prism-dur-fast: 145ms;
   --prism-dur-med: 240ms;
+  --prism-dur-spring: 340ms;
+  --prism-dur-glide: 320ms;
+  --prism-dur-exit: 140ms;
   --prism-hover-lift: translateY(-1px);
-  --prism-icon-scale: scale(1.055);
-  --prism-button-press: scale(0.98);
+  --prism-icon-scale: scale(1.06);
+  --prism-button-press: scale(0.955);
+  --prism-button-press-sm: scale(0.92);
   --prism-top-edge: inset 0 1px 0 var(--prism-specular);
   --prism-focus-ring: 0 0 0 2px var(--ws-primary-soft);
   --prism-tab-sheen: linear-gradient(180deg, var(--prism-accent-sheen), transparent 85%);
@@ -225,6 +233,15 @@
 
 :root[data-skin="prism"] .ws-tree-pane {
   box-shadow: var(--prism-top-edge);
+  transition:
+    margin-left 280ms var(--prism-ease-smooth),
+    transform 280ms var(--prism-ease-smooth),
+    opacity 180ms var(--prism-ease-smooth),
+    visibility 0s linear var(--prism-tree-visibility-delay, 0s);
+}
+
+:root[data-skin="prism"] .ws-workbench.is-tree-collapsed {
+  --prism-tree-visibility-delay: 280ms;
 }
 
 :root[data-skin="prism"] :is(.ws-mode-tabs, .ws-seg) {
@@ -232,18 +249,23 @@
   box-shadow: var(--prism-top-edge);
 }
 
+/* Tactile controls */
 :root[data-skin="prism"] :is(
   .ws-mode-tab, .ws-icon-btn, .ws-chip-btn, .ws-btn-ghost, .ws-btn-primary,
-  .ws-btn-secondary, .ws-doc-pill, .ws-sheet-tab, .ws-seg button,
-  .ws-quote-fab button, .ws-appearance-option, .ws-appearance-palette
-) {
+  .ws-btn-secondary, .ws-doc-pill, .ws-tab-close, .ws-tabs-popover-close,
+  .ws-tree-mini-btn, .ws-clear-x, .ws-sheet-tab, .ws-slide-thumb, .ws-seg button,
+  .ws-img-button, .ws-video-btn, .ws-md-block-btn, .ws-md-live-add, button.ws-md-empty,
+  .ws-quote-fab button, .ws-staged-delete, .ws-context-menu button, .ws-tabs-popover-item,
+  .ws-appearance-option, .ws-appearance-palette
+):where(:not(.ws-hold-btn)) {
   transition:
     width var(--prism-dur-med) var(--prism-ease-smooth),
-    transform var(--prism-dur-med) var(--prism-ease-spring),
-    background-color var(--prism-dur-fast) var(--prism-ease-smooth),
-    border-color var(--prism-dur-fast) var(--prism-ease-smooth),
-    box-shadow var(--prism-dur-med) var(--prism-ease-smooth),
-    color var(--prism-dur-fast) var(--prism-ease-smooth);
+    transform var(--prism-dur-spring) var(--prism-ease-return),
+    background-color var(--prism-indicator-paint-duration, var(--prism-dur-fast)) var(--prism-ease-smooth),
+    border-color var(--prism-indicator-paint-duration, var(--prism-dur-fast)) var(--prism-ease-smooth),
+    box-shadow var(--prism-indicator-paint-duration, var(--prism-dur-med)) var(--prism-ease-smooth),
+    color var(--prism-dur-fast) var(--prism-ease-smooth),
+    opacity var(--prism-dur-fast) var(--prism-ease-smooth);
 }
 
 :root[data-skin="prism"] :is(
@@ -255,11 +277,29 @@
   outline-offset: 2px;
 }
 
+/* The tab and picker row also have div variants with nested close buttons. */
 :root[data-skin="prism"] :is(
-  .ws-mode-tab, .ws-icon-btn, .ws-chip-btn, .ws-btn-ghost, .ws-btn-primary,
-  .ws-btn-secondary, .ws-sheet-tab, .ws-quote-fab button
-):active:enabled {
+  .ws-mode-tab, .ws-chip-btn, .ws-btn-ghost, .ws-btn-primary, .ws-btn-secondary,
+  .ws-doc-pill, .ws-sheet-tab, .ws-slide-thumb, .ws-seg button,
+  .ws-img-button:where(:not(.ws-img-swatch)), .ws-video-btn, .ws-md-block-btn,
+  .ws-md-live-add, button.ws-md-empty, .ws-quote-fab button, .ws-context-menu button,
+  .ws-tabs-popover-item, .ws-appearance-option, .ws-appearance-palette
+):active:enabled:where(:not(.ws-hold-btn:is([data-holding], [data-done]))),
+:root[data-skin="prism"] :is(div.ws-doc-pill, div.ws-tabs-popover-item):active:not(
+  [aria-disabled="true"], :has(> :is(.ws-tab-close, .ws-tabs-popover-close):active)
+) {
+  transition-duration: var(--prism-dur-press);
+  transition-timing-function: var(--prism-ease-press);
   transform: var(--prism-button-press);
+}
+
+:root[data-skin="prism"] :is(
+  .ws-icon-btn, .ws-tab-close, .ws-tabs-popover-close, .ws-tree-mini-btn,
+  .ws-clear-x, .ws-staged-delete, .ws-img-button.ws-img-swatch
+):active:enabled {
+  transition-duration: var(--prism-dur-press);
+  transition-timing-function: var(--prism-ease-press);
+  transform: var(--prism-button-press-sm);
 }
 
 :root[data-skin="prism"] :is(.ws-mode-tab.is-active, .ws-sheet-tab.is-active, .ws-seg button.is-active) {
@@ -321,23 +361,234 @@
 :root[data-skin="prism"] .ws-doc-pill {
   background: var(--prism-card-sheen) var(--ws-card);
   box-shadow: var(--prism-top-edge);
-}
-
-:root[data-skin="prism"] .ws-doc-pill:hover {
-  background: var(--prism-card-sheen) var(--ws-card-hover);
-  transform: var(--prism-hover-lift);
+  transform: none;
 }
 
 :root[data-skin="prism"] .ws-doc-pill.is-active {
   background: var(--prism-card-sheen) var(--ws-primary-soft);
   border-color: var(--prism-active-ring);
+}
+
+:root[data-skin="prism"] :is(
+  .ws-img-button, .ws-video-btn, :where(#toggleTreeBtn, #toggleIgnoredBtn, #producedFilterBtn)
+).is-active {
+  background: var(--ws-primary-soft);
+  border-color: var(--prism-active-ring);
+  color: var(--ws-fg);
+}
+
+:root[data-skin="prism"] :is(
+  .ws-doc-pill, .ws-img-button, .ws-video-btn, :where(#toggleTreeBtn, #toggleIgnoredBtn, #producedFilterBtn)
+).is-active {
   box-shadow: var(--prism-top-edge), var(--prism-active-glow);
+}
+
+:root[data-skin="prism"] .ws-sheet-tab.is-active {
+  --prism-control-active-shadow: var(--prism-nav-active-shadow);
+}
+
+:root[data-skin="prism"] :is(
+  .ws-doc-pill, .ws-sheet-tab, .ws-img-button, .ws-video-btn,
+  :where(#toggleTreeBtn, #toggleIgnoredBtn, #producedFilterBtn)
+).is-active {
+  animation: wsPrismActiveHighlight var(--prism-dur-spring) var(--prism-ease-spring);
+}
+
+@keyframes wsPrismActiveHighlight {
+  45% {
+    box-shadow:
+      var(--prism-control-active-shadow, var(--prism-top-edge)),
+      0 0 0 3px var(--ws-primary-soft);
+  }
+}
+
+:root[data-skin="prism"] :is(
+  .ws-mode-tab .ws-tab-icon, .ws-icon-btn > :is(svg, .ws-chip-icon), .ws-chip-btn .ws-chip-icon,
+  .ws-doc-pill .ws-ios-squircle, .ws-tree-row .ws-tree-icon .ws-ios-squircle
+) {
+  transform: none;
+  transition: transform var(--prism-dur-spring) var(--prism-ease-return);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  :root[data-skin="prism"] :where(
+    :is(.ws-btn-primary, .ws-btn-secondary, .ws-btn-ghost, .ws-chip-btn, .ws-sheet-tab,
+      .ws-quote-fab button, .ws-appearance-option, .ws-appearance-palette, .ws-slide-thumb):enabled,
+    .ws-doc-pill:not(:disabled, [aria-disabled="true"])
+  ):hover:where(:not(
+    :is(.ws-mode-tabs, .ws-seg, .ws-context-menu) *,
+    .ws-traj-chips[data-prism-indicator="ready"] > .ws-chip-btn.is-active,
+    .ws-hold-btn:is([data-holding], [data-done])
+  )) {
+    transform: var(--prism-hover-lift);
+    box-shadow: var(--prism-top-edge), var(--prism-shadow-sm);
+  }
+
+  :root[data-skin="prism"] .ws-doc-pill:hover:where(:not(.is-active, :disabled, [aria-disabled="true"])) {
+    background: var(--prism-card-sheen) var(--ws-card-hover);
+  }
+
+  :root[data-skin="prism"] .ws-icon-btn:hover:enabled:where(:not(.is-active)) {
+    box-shadow: var(--prism-top-edge);
+  }
+
+  :root[data-skin="prism"] :is(
+    .ws-mode-tab:hover:enabled .ws-tab-icon, .ws-icon-btn:hover:enabled > :is(svg, .ws-chip-icon),
+    .ws-chip-btn:hover:enabled .ws-chip-icon,
+    .ws-doc-pill:hover:not(:disabled, [aria-disabled="true"]) .ws-ios-squircle,
+    .ws-tree-row:hover .ws-tree-icon .ws-ios-squircle
+  ) {
+    transform: var(--prism-icon-scale);
+  }
+}
+
+:root[data-skin="prism"] .ws-hold-btn {
+  transition:
+    width 550ms var(--prism-ease-spring),
+    transform 250ms var(--prism-ease-spring),
+    background-color var(--prism-dur-fast) var(--prism-ease-smooth),
+    border-color var(--prism-dur-fast) var(--prism-ease-smooth),
+    color var(--prism-dur-fast) var(--prism-ease-smooth),
+    box-shadow var(--prism-dur-med) var(--prism-ease-smooth);
+}
+
+:root[data-skin="prism"] .ws-hold-btn[data-holding] {
+  transform: var(--prism-button-press);
+  background: color-mix(in srgb, var(--ws-danger) 10%, var(--ws-card));
+  border-color: color-mix(in srgb, var(--ws-danger) 62%, var(--ws-border));
+  color: var(--ws-danger);
+  box-shadow: var(--prism-top-edge);
+}
+
+:root[data-skin="prism"] .ws-hold-btn[data-done],
+:root[data-skin="prism"] .ws-hold-btn[data-done]:is(:hover, :active):enabled {
+  width: 23px;
+  transform: none;
+  background: linear-gradient(180deg, color-mix(in srgb, #ffffff 16%, var(--ws-danger)), var(--ws-danger));
+  border-color: color-mix(in srgb, #ffffff 28%, var(--ws-danger));
+  color: #ffffff;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 28%), 0 2px 10px color-mix(in srgb, var(--ws-danger) 35%, transparent);
+}
+
+:root[data-skin="prism"] .ws-hold-hint {
+  background: var(--prism-glass-overlay);
+  -webkit-backdrop-filter: blur(14px) saturate(145%);
+  backdrop-filter: blur(14px) saturate(145%);
+  border-color: var(--ws-border-strong);
+  box-shadow: var(--prism-top-edge), var(--prism-shadow-sm);
+}
+
+/* The indicator takes over only after its geometry is ready. */
+:root:not([data-skin="prism"]) .ws-prism-indicator {
+  display: none !important;
+}
+
+:root[data-skin="prism"] :is(.ws-mode-tabs, .ws-seg, .ws-traj-chips) {
+  position: relative;
+  isolation: isolate;
+}
+
+:root[data-skin="prism"] :is(.ws-mode-tabs > .ws-mode-tab, .ws-seg > button, .ws-traj-chips > .ws-chip-btn) {
+  position: relative;
+  z-index: 1;
+}
+
+:root[data-skin="prism"] .ws-prism-indicator {
+  position: absolute;
+  left: 0;
+  top: 0;
+  z-index: 0;
+  pointer-events: none;
+  transform: translate3d(var(--ind-x, 0px), var(--ind-y, 0px), 0);
+  width: var(--ind-w, 0px);
+  height: var(--ind-h, 0px);
+  opacity: 1;
+  will-change: transform, width, height;
+  transition:
+    transform var(--prism-dur-glide) var(--prism-ease-glide),
+    width var(--prism-dur-glide) var(--prism-ease-glide),
+    height var(--prism-dur-glide) var(--prism-ease-glide),
+    opacity var(--prism-dur-fast) var(--prism-ease-smooth);
+}
+
+:root[data-skin="prism"] .ws-prism-indicator.is-snapping {
+  transition: none !important;
+}
+
+:root[data-skin="prism"] .ws-prism-indicator.is-empty {
+  opacity: 0;
+}
+
+:root[data-skin="prism"] .ws-prism-indicator-pill {
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform-origin: center;
+}
+
+@keyframes wsPrismIndicatorSquash {
+  0% { transform: scaleX(1) scaleY(1); }
+  36% { transform: scaleX(1.075) scaleY(0.92); }
+  72% { transform: scaleX(0.985) scaleY(1.02); }
+  100% { transform: scaleX(1) scaleY(1); }
+}
+
+:root[data-skin="prism"] .ws-prism-indicator.is-gliding .ws-prism-indicator-pill {
+  animation: wsPrismIndicatorSquash var(--prism-dur-glide) var(--prism-ease-smooth);
+}
+
+:root[data-skin="prism"] .ws-prism-indicator[data-indicator-kind="mode"] .ws-prism-indicator-pill {
+  border-radius: 6.5px;
+  background: var(--prism-nav-active-bg);
+  box-shadow: var(--prism-nav-active-shadow);
+}
+
+:root[data-skin="prism"] .ws-prism-indicator[data-indicator-kind="seg"] .ws-prism-indicator-pill {
+  border-radius: 6px;
+  background: var(--prism-nav-active-bg);
+  box-shadow: var(--prism-nav-active-shadow);
+}
+
+:root[data-skin="prism"]:is([data-prism-resolved="obsidian-dark"], :not([data-prism-resolved], [data-theme="light"]))
+  .ws-prism-indicator:is([data-indicator-kind="mode"], [data-indicator-kind="seg"]) .ws-prism-indicator-pill {
+  box-shadow: var(--prism-nav-active-shadow), inset 0 0 0 1px var(--prism-nav-active-border);
+}
+
+:root[data-skin="prism"] .ws-prism-indicator[data-indicator-kind="chip"] .ws-prism-indicator-pill {
+  border-radius: 999px;
+  background: var(--ws-primary-soft);
+  border: 1px solid var(--prism-active-ring);
+  box-shadow: var(--prism-top-edge), var(--prism-active-glow);
+}
+
+/* Clear the active paint immediately as the indicator takes over. */
+:root[data-skin="prism"] :is(.ws-mode-tabs, .ws-seg)[data-prism-indicator="ready"] > :is(.ws-mode-tab.is-active, button.is-active) {
+  --prism-indicator-paint-duration: 0ms;
+  background: transparent;
+  box-shadow: none;
+  color: var(--prism-nav-active-fg);
+}
+
+:root[data-skin="prism"] .ws-traj-chips[data-prism-indicator="ready"] > .ws-chip-btn.is-active {
+  --prism-indicator-paint-duration: 0ms;
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--ws-fg);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  :root[data-skin="prism"] .ws-traj-chips[data-prism-indicator="ready"] > .ws-chip-btn:hover:not(.is-active):enabled {
+    background-color: color-mix(in srgb, var(--ws-card-hover) 65%, transparent);
+  }
 }
 
 :root[data-skin="prism"] .ws-splitter {
   transition:
+    width 280ms var(--prism-ease-smooth),
+    opacity 180ms var(--prism-ease-smooth),
     background-color var(--prism-dur-fast) var(--prism-ease-smooth),
-    box-shadow var(--prism-dur-fast) var(--prism-ease-smooth);
+    box-shadow var(--prism-dur-fast) var(--prism-ease-smooth) !important;
 }
 
 :root[data-skin="prism"] .ws-splitter:is(:hover, .is-dragging) {
@@ -360,14 +611,6 @@
   box-shadow: inset 2px 0 var(--prism-active-ring), var(--prism-top-edge);
 }
 
-:root[data-skin="prism"] :is(.ws-doc-pill, .ws-tree-row) .ws-ios-squircle {
-  transition: transform var(--prism-dur-med) var(--prism-ease-spring);
-}
-
-:root[data-skin="prism"] :is(.ws-doc-pill:hover .ws-ios-squircle, .ws-tree-row:hover .ws-tree-icon .ws-ios-squircle) {
-  transform: var(--prism-icon-scale);
-}
-
 :root[data-skin="prism"] .ws-search-wrap:focus-within {
   box-shadow: var(--prism-focus-ring);
 }
@@ -378,8 +621,23 @@
     box-shadow: var(--prism-top-edge), var(--prism-shadow-lg);
     -webkit-backdrop-filter: blur(14px) saturate(145%);
     backdrop-filter: blur(14px) saturate(145%);
-    transition: transform var(--prism-dur-med) var(--prism-ease-smooth);
+    transition:
+      transform 280ms var(--prism-ease-smooth),
+      opacity 180ms var(--prism-ease-smooth),
+      visibility 0s linear var(--prism-tree-visibility-delay, 0s) !important;
   }
+
+  :root[data-skin="prism"] .ws-drawer-backdrop {
+    transition:
+      opacity 280ms var(--prism-ease-smooth),
+      visibility 0s linear var(--prism-tree-visibility-delay, 0s) !important;
+  }
+}
+
+:root[data-skin="prism"] .ws-workbench.is-tree-resizing :is(.ws-tree-pane, .ws-splitter),
+:root[data-skin="prism"] .ws-workbench:has(> .ws-splitter.is-dragging) .ws-tree-pane,
+:root[data-skin="prism"] .ws-splitter.is-dragging {
+  transition: none !important;
 }
 
 :root[data-skin="prism"] .ws-empty-welcome {
@@ -580,6 +838,92 @@
   border-radius: 0 0 5px 5px;
 }
 
+/* Semantic icon and badge feedback */
+@keyframes wsPrismRefreshSpin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+:root[data-skin="prism"] .is-prism-spinning svg {
+  animation: wsPrismRefreshSpin 540ms var(--prism-ease-glide);
+}
+
+@keyframes wsPrismTextPulse {
+  0% { transform: scale(1); }
+  42% { transform: scale(0.94); }
+  100% { transform: scale(1); }
+}
+
+:root[data-skin="prism"] .is-prism-pulse {
+  animation: wsPrismTextPulse 300ms var(--prism-ease-spring);
+}
+
+:root[data-skin="prism"] #appearanceBtn .ws-chip-icon {
+  transition: transform var(--prism-dur-spring) var(--prism-ease-spring);
+}
+
+:root[data-skin="prism"] #appearanceBtn[aria-expanded="true"] .ws-chip-icon {
+  transform: rotate(45deg) scale(1.06);
+}
+
+@keyframes wsPrismSparkle {
+  0% { transform: rotate(0deg) scale(1); }
+  45% { transform: rotate(90deg) scale(1.16); }
+  100% { transform: rotate(180deg) scale(1); }
+}
+
+:root[data-skin="prism"] #appearanceBtn.is-prism-shimmer .ws-chip-icon {
+  animation: wsPrismSparkle 420ms var(--prism-ease-spring);
+}
+
+@keyframes wsPrismUpdateHint {
+  0%, 68%, 92%, 100% { transform: translateY(0) rotate(0deg); }
+  74% { transform: translateY(1.25px) rotate(5deg); }
+  80% { transform: translateY(-0.75px) rotate(-4deg); }
+  86% { transform: translateY(0.5px) rotate(2deg); }
+}
+
+:root[data-skin="prism"] #updateCenterBtn.has-update:not([aria-expanded="true"]) .ws-chip-icon {
+  animation: wsPrismUpdateHint 3.8s var(--prism-ease-smooth) infinite;
+}
+
+@keyframes wsPrismDotBreathe {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 2px var(--ws-surface), 0 0 0 2px transparent;
+  }
+  50% {
+    transform: scale(1.1);
+    box-shadow: 0 0 0 2px var(--ws-surface), 0 0 0 4px color-mix(in srgb, var(--ws-success) 18%, transparent);
+  }
+}
+
+:root[data-skin="prism"] #updateDot:not(.is-hidden) {
+  animation: wsPrismDotBreathe 2.6s ease-in-out infinite;
+}
+
+@keyframes wsPrismBadgePop {
+  0% { transform: scale(0.72); }
+  60% { transform: scale(1.14); }
+  100% { transform: scale(1); }
+}
+
+:root[data-skin="prism"] .is-prism-badge-pop {
+  animation: wsPrismBadgePop 320ms var(--prism-ease-spring);
+}
+
+@keyframes wsPrismStagedPulse {
+  0%, 100% { scale: 1; }
+  42% {
+    scale: 1.035;
+    box-shadow: var(--prism-top-edge), 0 0 0 4px var(--ws-primary-soft);
+  }
+}
+
+:root[data-skin="prism"] #stagedCommentsBtn.is-pulse:enabled {
+  animation: wsPrismStagedPulse var(--prism-dur-spring) var(--prism-ease-spring);
+}
+
 /* Menus, appearance controls, and feedback. */
 :root[data-skin="prism"] :is(.ws-tabs-popover, .ws-staged-popover, .ws-appearance-popover, .ws-context-menu, .ws-modal, .ws-toast) {
   color: var(--ws-fg);
@@ -599,8 +943,24 @@
   }
 }
 
-:root[data-skin="prism"] :is(.ws-tabs-popover, .ws-staged-popover, .ws-appearance-popover, .ws-context-menu, .ws-modal, .ws-quote-fab) {
+@keyframes wsPrismPopOut {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.97);
+  }
+}
+
+:root[data-skin="prism"] :is(.ws-tabs-popover, .ws-staged-popover, .ws-appearance-popover, .ws-context-menu, .ws-quote-fab) {
   animation: wsPrismPopIn var(--prism-dur-med) var(--prism-ease-spring);
+}
+
+:root[data-skin="prism"] :is(.ws-tabs-popover, .ws-staged-popover, .ws-appearance-popover, .ws-context-menu, .ws-quote-fab).is-prism-closing {
+  animation: wsPrismPopOut var(--prism-dur-exit) var(--prism-ease-smooth) forwards;
+  pointer-events: none !important;
 }
 
 :root[data-skin="prism"] :is(.ws-tabs-popover, .ws-staged-popover, .ws-appearance-popover) {
@@ -609,6 +969,108 @@
 
 :root[data-skin="prism"] .ws-context-menu {
   transform-origin: top left;
+}
+
+:root[data-skin="prism"] .ws-quote-fab {
+  transform-origin: bottom center;
+}
+
+@keyframes wsPrismBackdropIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes wsPrismBackdropOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@keyframes wsPrismModalIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.965);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes wsPrismModalOut {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(4px) scale(0.97);
+  }
+}
+
+:root[data-skin="prism"] .ws-modal-backdrop {
+  animation: wsPrismBackdropIn var(--prism-dur-fast) var(--prism-ease-smooth);
+}
+
+:root[data-skin="prism"] .ws-modal-backdrop .ws-modal {
+  animation: wsPrismModalIn var(--prism-dur-med) var(--prism-ease-spring);
+}
+
+:root[data-skin="prism"] .ws-modal-backdrop.is-prism-closing {
+  animation: wsPrismBackdropOut var(--prism-dur-exit) var(--prism-ease-smooth) forwards;
+  pointer-events: none !important;
+}
+
+:root[data-skin="prism"] .ws-modal-backdrop.is-prism-closing .ws-modal {
+  animation: wsPrismModalOut var(--prism-dur-exit) var(--prism-ease-smooth) forwards;
+}
+
+@keyframes wsPrismToastIn {
+  from {
+    opacity: 0;
+    transform: translate(-50%, 8px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+}
+
+@keyframes wsPrismToastOut {
+  from {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translate(-50%, 6px) scale(0.97);
+  }
+}
+
+:root[data-skin="prism"] .ws-toast {
+  animation: wsPrismToastIn 220ms var(--prism-ease-spring);
+}
+
+:root[data-skin="prism"] .ws-toast.is-prism-closing {
+  animation: wsPrismToastOut var(--prism-dur-exit) var(--prism-ease-smooth) forwards;
+  pointer-events: none !important;
+}
+
+@keyframes wsPrismPaneEnterLeft {
+  from { opacity: 0.72; transform: translateX(-6px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes wsPrismPaneEnterRight {
+  from { opacity: 0.72; transform: translateX(6px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+:root[data-skin="prism"] .is-prism-pane-enter-left {
+  animation: wsPrismPaneEnterLeft 160ms var(--prism-ease-smooth);
+}
+
+:root[data-skin="prism"] .is-prism-pane-enter-right {
+  animation: wsPrismPaneEnterRight 160ms var(--prism-ease-smooth);
 }
 
 :root[data-skin="prism"] .ws-quote-fab button {
@@ -646,6 +1108,42 @@
   box-shadow: var(--prism-top-edge), var(--prism-active-glow);
 }
 
+:root[data-skin="prism"] .ws-appearance-check {
+  display: inline-flex;
+  opacity: 0;
+  transform: scale(0.45);
+  pointer-events: none;
+  transition:
+    opacity var(--prism-dur-fast) var(--prism-ease-smooth),
+    transform var(--prism-dur-spring) var(--prism-ease-spring);
+}
+
+:root[data-skin="prism"] .ws-appearance-grid .ws-appearance-palette .ws-appearance-check {
+  position: absolute;
+  top: 11px;
+  right: 11px;
+  box-shadow: 0 0 0 2px var(--ws-surface);
+}
+
+:root[data-skin="prism"] :is(.ws-appearance-option, .ws-appearance-palette)[aria-pressed="true"] .ws-appearance-check {
+  opacity: 1;
+  transform: scale(1);
+}
+
+:root[data-skin="prism"] .ws-appearance-swatch::after {
+  opacity: 0.72;
+  transition:
+    transform var(--prism-dur-med) var(--prism-ease-smooth),
+    opacity var(--prism-dur-fast) var(--prism-ease-smooth);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  :root[data-skin="prism"] :is(.ws-appearance-option, .ws-appearance-palette):hover:enabled .ws-appearance-swatch::after {
+    transform: translateX(6%);
+    opacity: 1;
+  }
+}
+
 :root[data-skin="prism"] :is(.ws-tabs-popover-search, .ws-staged-header, .ws-staged-footer, .ws-modal-footer) {
   background: var(--prism-card-sheen) var(--ws-card);
 }
@@ -672,10 +1170,18 @@
   --prism-hover-lift: none;
   --prism-icon-scale: none;
   --prism-button-press: none;
+  --prism-button-press-sm: none;
 }
 
-:root[data-skin="prism"][data-motion="reduced"] * {
+:root[data-skin="prism"][data-motion="reduced"] *,
+:root[data-skin="prism"][data-motion="reduced"] *::before,
+:root[data-skin="prism"][data-motion="reduced"] *::after,
+:root[data-skin="prism"][data-motion="reduced"] :is(
+  .ws-tree-pane, .ws-splitter, .ws-drawer-backdrop,
+  .ws-hold-btn, .ws-hold-fill, .ws-hold-label, .ws-hold-check, .ws-hold-hint
+) {
   transition-duration: 0.01ms !important;
+  transition-delay: 0s !important;
   animation: none !important;
 }
 
@@ -684,10 +1190,18 @@
     --prism-hover-lift: none;
     --prism-icon-scale: none;
     --prism-button-press: none;
+    --prism-button-press-sm: none;
   }
 
-  :root[data-skin="prism"] * {
+  :root[data-skin="prism"] *,
+  :root[data-skin="prism"] *::before,
+  :root[data-skin="prism"] *::after,
+  :root[data-skin="prism"] #ws-app :is(
+    .ws-tree-pane, .ws-splitter, .ws-drawer-backdrop,
+    .ws-hold-btn, .ws-hold-fill, .ws-hold-label, .ws-hold-check, .ws-hold-hint
+  ) {
     transition-duration: 0.01ms !important;
+    transition-delay: 0s !important;
     animation: none !important;
   }
 }

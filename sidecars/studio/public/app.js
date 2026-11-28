@@ -16,6 +16,26 @@
   const WSIcons = global.WSIcons;
   if (WSIcons?.hydrate) WSIcons.hydrate(document);
 
+  function motionOpen(el) {
+    if (global.WSPrismMotion?.openOverlay) global.WSPrismMotion.openOverlay(el);
+    else el?.classList.remove('is-hidden');
+  }
+
+  function motionClose(el, opts) {
+    if (global.WSPrismMotion?.closeOverlay) {
+      global.WSPrismMotion.closeOverlay(el, opts);
+    } else {
+      el?.classList.add('is-hidden');
+      opts?.onDone?.();
+    }
+  }
+
+  function isMotionOverlayOpen(el) {
+    return global.WSPrismMotion?.isOverlayOpen
+      ? global.WSPrismMotion.isOverlayOpen(el)
+      : Boolean(el && !el.classList.contains('is-hidden'));
+  }
+
   function renderFileSvg(item, opts = {}) {
     if (WSIcons?.renderFile) return WSIcons.renderFile(item, opts);
     return '';
@@ -100,9 +120,9 @@
   function showToast(msg, duration = 2200) {
     const el = $('wsToast');
     el.textContent = msg;
-    el.classList.remove('is-hidden');
+    motionOpen(el);
     if (toastTimer) clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => el.classList.add('is-hidden'), duration);
+    toastTimer = setTimeout(() => motionClose(el), duration);
   }
 
   // ---------- Host Theme & Appearance Sync ----------
@@ -137,6 +157,7 @@
     const motionInput = $('appearanceReducedMotionInput');
     if (motionInput) motionInput.checked = motion === 'reduced';
     $('appearanceBtn')?.classList.toggle('is-active', skin === 'prism' || state.appearancePopoverOpen);
+    global.WSPrismMotion?.syncAll?.({ snap: true });
   }
 
   function syncThemeScheme() {
@@ -195,13 +216,19 @@
   }
 
   function setAppearance(patch) {
-    state.appearance = normalizeAppearance({ ...state.appearance, ...patch });
+    const previousAppearance = state.appearance;
+    const appearance = normalizeAppearance({ ...previousAppearance, ...patch });
+    state.appearance = appearance;
     state.appearanceDirtyLocal = true;
     applyAppearanceToDom();
     saveStoredAppearance();
 
+    if (appearance.skin === 'prism'
+      && (previousAppearance.skin !== appearance.skin || previousAppearance.prismVariant !== appearance.prismVariant)) {
+      global.WSPrismMotion?.triggerPrismShimmer?.($('appearanceBtn'));
+    }
+
     // Preserve selection order when the user makes rapid changes.
-    const appearance = state.appearance;
     appearanceSave = appearanceSave.then(() => postJson('/api/ui/prefs', appearance)).catch(() => {});
   }
 
@@ -219,10 +246,10 @@
     if (state.updateModalOpen) return;
     closeOpenTabsPopover();
     closeStagedPopover();
-    $('treeContextMenu')?.classList.add('is-hidden');
-    $('tabContextMenu')?.classList.add('is-hidden');
+    motionClose($('treeContextMenu'));
+    motionClose($('tabContextMenu'));
     state.appearancePopoverOpen = true;
-    $('appearancePopover').classList.remove('is-hidden');
+    motionOpen($('appearancePopover'));
     $('appearanceBtn').setAttribute('aria-expanded', 'true');
     applyAppearanceToDom();
     $('appearanceCloseBtn').focus();
@@ -231,7 +258,7 @@
   function closeAppearancePopover({ restoreFocus = false } = {}) {
     if (!state.appearancePopoverOpen) return;
     state.appearancePopoverOpen = false;
-    $('appearancePopover').classList.add('is-hidden');
+    motionClose($('appearancePopover'));
     const btn = $('appearanceBtn');
     btn.setAttribute('aria-expanded', 'false');
     applyAppearanceToDom();
@@ -290,6 +317,7 @@
   });
 
   function switchMode(mode) {
+    const prevMode = state.mode;
     state.mode = mode;
     $('tabWorkbench').classList.toggle('is-active', mode === 'workbench');
     $('tabTrajectory').classList.toggle('is-active', mode === 'trajectory');
@@ -297,6 +325,13 @@
     $('tabTrajectory').setAttribute('aria-selected', String(mode === 'trajectory'));
     $('workbenchPane').classList.toggle('is-hidden', mode !== 'workbench');
     $('trajectoryPane').classList.toggle('is-hidden', mode !== 'trajectory');
+    global.WSPrismMotion?.syncContainer?.(document.querySelector('.ws-mode-tabs'));
+    if (prevMode !== mode) {
+      global.WSPrismMotion?.animatePaneSwitch?.(
+        mode === 'trajectory' ? $('trajectoryPane') : $('workbenchPane'),
+        mode === 'trajectory' ? 'right' : 'left',
+      );
+    }
     trajectoryCtrl.setVisible(mode === 'trajectory');
   }
 
@@ -306,6 +341,13 @@
   function setTreeCollapsed(collapsed) {
     $('workbenchPane').classList.toggle('is-tree-collapsed', collapsed);
     $('toggleTreeBtn').classList.toggle('is-active', !collapsed);
+    $('toggleTreeBtn')?.setAttribute('aria-expanded', String(!collapsed));
+    const treePane = $('treePane');
+    if (treePane) {
+      treePane.inert = Boolean(collapsed);
+      treePane.setAttribute('aria-hidden', String(Boolean(collapsed)));
+    }
+    $('paneSplitter')?.setAttribute('aria-hidden', String(Boolean(collapsed)));
   }
 
   setTreeCollapsed(global.innerWidth < 520);
@@ -348,6 +390,7 @@
       e.preventDefault();
       dragging = true;
       splitter.classList.add('is-dragging');
+      workbench.classList.add('is-tree-resizing');
     });
     global.addEventListener('mousemove', (e) => {
       if (!dragging) return;
@@ -355,11 +398,14 @@
       const w = Math.min(Math.max(e.clientX - rect.left, 150), 460);
       workbench.style.setProperty('--ws-tree-width', `${Math.round(w)}px`);
     });
-    global.addEventListener('mouseup', () => {
+    function finishDrag() {
       if (!dragging) return;
       dragging = false;
       splitter.classList.remove('is-dragging');
-    });
+      workbench.classList.remove('is-tree-resizing');
+    }
+    global.addEventListener('mouseup', finishDrag);
+    global.addEventListener('blur', finishDrag);
   })();
 
   // ---------- File Tree ----------
@@ -584,17 +630,20 @@
     $('toggleIgnoredBtn').classList.toggle('is-active', state.showIgnored);
     reloadExpandedDirs();
   });
-  $('refreshTreeBtn').addEventListener('click', reloadExpandedDirs);
+  $('refreshTreeBtn').addEventListener('click', () => {
+    global.WSPrismMotion?.triggerRefreshSpin?.($('refreshTreeBtn'));
+    reloadExpandedDirs();
+  });
 
   // ---------- Context Menu & File Actions ----------
   function showContextMenu(x, y, item) {
     state.contextTarget = item;
-    $('tabContextMenu')?.classList.add('is-hidden');
+    motionClose($('tabContextMenu'));
     closeOpenTabsPopover();
     closeStagedPopover();
     closeAppearancePopover();
     const menu = $('treeContextMenu');
-    menu.classList.remove('is-hidden');
+    motionOpen(menu);
     const maxX = global.innerWidth - 205;
     const maxY = global.innerHeight - 175;
     menu.style.left = `${Math.max(6, Math.min(x, maxX))}px`;
@@ -602,8 +651,8 @@
   }
 
   document.addEventListener('click', (e) => {
-    $('treeContextMenu').classList.add('is-hidden');
-    $('tabContextMenu')?.classList.add('is-hidden');
+    motionClose($('treeContextMenu'));
+    motionClose($('tabContextMenu'));
     if (!e.target.closest('#openTabsPopover, #openTabsPickerBtn')) {
       closeOpenTabsPopover();
     }
@@ -1016,6 +1065,7 @@
   }
 
   $('previewRefreshBtn').addEventListener('click', () => {
+    global.WSPrismMotion?.triggerRefreshSpin?.($('previewRefreshBtn'));
     if (state.activeFile) openFilePreview(state.activeFile, { preserveState: true });
   });
   $('previewLocateTreeBtn')?.addEventListener('click', () => {
@@ -1144,21 +1194,25 @@
   const quoteFab = $('quoteFab');
   let selectedQuoteText = '';
 
+  function hideQuoteFab() {
+    if (isMotionOverlayOpen(quoteFab)) motionClose(quoteFab);
+  }
+
   function checkPreviewSelection() {
     const ae = document.activeElement;
     if (ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT' || ae.isContentEditable)) {
-      quoteFab.classList.add('is-hidden');
+      hideQuoteFab();
       return;
     }
     const stage = $('previewStage');
     const sel = global.getSelection();
     if (!sel || sel.isCollapsed || !state.activeFile) {
-      quoteFab.classList.add('is-hidden');
+      hideQuoteFab();
       return;
     }
     const text = sel.toString().trim();
     if (!text || !stage.contains(sel.anchorNode)) {
-      quoteFab.classList.add('is-hidden');
+      hideQuoteFab();
       return;
     }
     selectedQuoteText = text.slice(0, 3000);
@@ -1168,9 +1222,9 @@
       const y = Math.max(rect.top - 36, 46);
       quoteFab.style.left = `${x}px`;
       quoteFab.style.top = `${y}px`;
-      quoteFab.classList.remove('is-hidden');
+      if (!isMotionOverlayOpen(quoteFab)) motionOpen(quoteFab);
     } catch {
-      quoteFab.classList.add('is-hidden');
+      hideQuoteFab();
     }
   }
 
@@ -1180,13 +1234,13 @@
   function openQuoteModal({ text, locationLabel = '' }) {
     if (!state.activeFile || !text) return;
     closeStagedPopover();
-    quoteFab.classList.add('is-hidden');
+    motionClose(quoteFab);
     state.pendingQuote = { file: state.activeFile, text, locationLabel };
     const loc = locationLabel ? ` (${locationLabel})` : '';
     $('quoteSourceMeta').textContent = `来源：${state.activeFile.relPath || state.activeFile.name}${loc}`;
     $('quoteExcerptBox').textContent = text;
     $('quoteCommentInput').value = '';
-    $('quoteModal').classList.remove('is-hidden');
+    motionOpen($('quoteModal'));
     $('quoteCommentInput').focus();
   }
 
@@ -1194,9 +1248,9 @@
     if (selectedQuoteText) openQuoteModal({ text: selectedQuoteText });
   });
 
-  $('quoteModalClose').addEventListener('click', () => $('quoteModal').classList.add('is-hidden'));
+  $('quoteModalClose').addEventListener('click', () => motionClose($('quoteModal')));
   $('quoteModal').addEventListener('click', (e) => {
-    if (e.target === $('quoteModal')) $('quoteModal').classList.add('is-hidden');
+    if (e.target === $('quoteModal')) motionClose($('quoteModal'));
   });
 
   $('quoteSendBtn').addEventListener('click', async () => {
@@ -1213,7 +1267,7 @@
       comment ? `\n\n修改/处理意见：${comment}` : '\n\n请针对以上内容提供分析或修改建议。'
     }`;
 
-    $('quoteModal').classList.add('is-hidden');
+    motionClose($('quoteModal'));
     await sendToAgent(message);
   });
 
@@ -1317,6 +1371,8 @@
     }
   }
 
+  let lastRenderedStagedCount = null;
+
   function renderStagedCommentsUi() {
     const n = state.stagedComments.length;
     if (n <= 1) resetStagedClearConfirm();
@@ -1325,6 +1381,11 @@
     btn.setAttribute('aria-label', `待发批注（${n} 条）`);
     $('stagedCommentsCount').textContent = String(n);
     $('stagedCommentsTitleCount').textContent = String(n);
+    if (lastRenderedStagedCount !== null && n !== lastRenderedStagedCount && n > 0) {
+      global.WSPrismMotion?.popBadge?.($('stagedCommentsCount'));
+      global.WSPrismMotion?.popBadge?.($('stagedCommentsTitleCount'));
+    }
+    lastRenderedStagedCount = n;
     $('stagedCommentsSendText').textContent = n > 0 ? `合并发给 AI (${n})` : '合并发给 AI';
     $('stagedCommentsClearBtn').disabled = n === 0;
     $('stagedCommentsCopyBtn').disabled = n === 0;
@@ -1396,10 +1457,10 @@
     if (!state.stagedComments.length) return;
     closeOpenTabsPopover();
     closeAppearancePopover();
-    $('treeContextMenu').classList.add('is-hidden');
-    $('tabContextMenu')?.classList.add('is-hidden');
+    motionClose($('treeContextMenu'));
+    motionClose($('tabContextMenu'));
     state.stagedPopoverOpen = true;
-    $('stagedCommentsPopover').classList.remove('is-hidden');
+    motionOpen($('stagedCommentsPopover'));
     const btn = $('stagedCommentsBtn');
     btn.setAttribute('aria-expanded', 'true');
     btn.classList.add('is-active');
@@ -1410,7 +1471,7 @@
     resetStagedClearConfirm();
     if (!state.stagedPopoverOpen) return;
     state.stagedPopoverOpen = false;
-    $('stagedCommentsPopover').classList.add('is-hidden');
+    motionClose($('stagedCommentsPopover'));
     const btn = $('stagedCommentsBtn');
     btn.setAttribute('aria-expanded', 'false');
     btn.classList.remove('is-active');
@@ -1433,7 +1494,7 @@
     state.stagedComments.push(item);
     saveStagedComments();
     state.pendingQuote = null;
-    $('quoteModal').classList.add('is-hidden');
+    motionClose($('quoteModal'));
     renderStagedCommentsUi();
     const btn = $('stagedCommentsBtn');
     btn.classList.remove('is-pulse');
@@ -1560,7 +1621,7 @@
     $('previewEngineBadge').textContent = '';
     $('previewSubtoolbar').classList.add('is-hidden');
     $('previewSubtoolbar').innerHTML = '';
-    $('quoteFab')?.classList.add('is-hidden');
+    motionClose(quoteFab);
 
     for (const row of document.querySelectorAll('.ws-tree-row')) {
       row.classList.remove('is-active');
@@ -1624,14 +1685,14 @@
   }
 
   let closeAllInFlight = false;
-  async function closeAllTabs() {
+  async function closeAllTabs({ skipDirtyCheck = false } = {}) {
     if (closeAllInFlight) return;
     const initialDocs = getVisibleTabDocs();
     if (!initialDocs.length && !state.activeFile) return;
 
     closeAllInFlight = true;
     try {
-      if (state.activeController?.isDirty?.()) {
+      if (!skipDirtyCheck && state.activeController?.isDirty?.()) {
         const ok = await confirmDiscardIfDirty();
         if (!ok) return;
       }
@@ -1762,17 +1823,12 @@
 
   // ---------- 已打开标签页速查下拉面板 & 标签右键菜单 ----------
   function isOpenTabsPopoverOpen() {
-    const pop = $('openTabsPopover');
-    return Boolean(pop && !pop.classList.contains('is-hidden'));
+    return isMotionOverlayOpen($('openTabsPopover'));
   }
 
   function closeOpenTabsPopover() {
-    const pop = $('openTabsPopover');
-    const btn = $('openTabsPickerBtn');
-    if (pop && !pop.classList.contains('is-hidden')) {
-      pop.classList.add('is-hidden');
-    }
-    if (btn) btn.setAttribute('aria-expanded', 'false');
+    motionClose($('openTabsPopover'));
+    $('openTabsPickerBtn')?.setAttribute('aria-expanded', 'false');
   }
 
   function renderOpenTabsPopoverList() {
@@ -1864,12 +1920,12 @@
     if (!docs.length) return;
     closeStagedPopover();
     closeAppearancePopover();
-    $('treeContextMenu')?.classList.add('is-hidden');
-    $('tabContextMenu')?.classList.add('is-hidden');
+    motionClose($('treeContextMenu'));
+    motionClose($('tabContextMenu'));
     state.openTabsFilterQuery = '';
     const inputEl = $('openTabsFilterInput');
     if (inputEl) inputEl.value = '';
-    pop.classList.remove('is-hidden');
+    motionOpen(pop);
     btn.setAttribute('aria-expanded', 'true');
     renderOpenTabsPopoverList();
     inputEl?.focus();
@@ -1879,7 +1935,7 @@
     if (!doc?.path) return;
     const menu = $('tabContextMenu');
     if (!menu) return;
-    $('treeContextMenu')?.classList.add('is-hidden');
+    motionClose($('treeContextMenu'));
     closeOpenTabsPopover();
     closeStagedPopover();
     closeAppearancePopover();
@@ -1896,7 +1952,7 @@
     if (btnRight) btnRight.disabled = idx < 0 || idx >= docs.length - 1;
     if (btnAll) btnAll.disabled = docs.length === 0;
 
-    menu.classList.remove('is-hidden');
+    motionOpen(menu);
     const mw = menu.offsetWidth || 195;
     const mh = menu.offsetHeight || 210;
     const maxX = Math.max(6, global.innerWidth - mw - 6);
@@ -1910,7 +1966,7 @@
     if (!btn || btn.disabled || !state.tabContextTarget) return;
     const doc = state.tabContextTarget;
     const act = btn.dataset.tabAction;
-    $('tabContextMenu')?.classList.add('is-hidden');
+    motionClose($('tabContextMenu'));
     if (act === 'locate-tree') {
       await revealFileInTree(doc);
     } else if (act === 'close-self') {
@@ -1927,11 +1983,11 @@
   function renderProducedStrip() {
     const listEl = $('producedList');
     const docs = getVisibleTabDocs();
+    const hasTabs = docs.length > 0;
 
     const pickerBtn = $('openTabsPickerBtn');
     const countEl = $('openTabsCountText');
     if (pickerBtn) {
-      const hasTabs = docs.length > 0;
       pickerBtn.classList.toggle('is-hidden', !hasTabs);
       if (countEl) countEl.textContent = String(docs.length);
       pickerBtn.title = hasTabs
@@ -1943,15 +1999,19 @@
       renderOpenTabsPopoverList();
     }
 
+    const closeAllWrap = $('closeAllTabsWrap');
     const closeAllBtn = $('closeAllTabsBtn');
+    const keepForDone = Boolean(closeAllHoldCtrl?.isDone?.());
+    const showCloseAll = hasTabs || keepForDone;
+    closeAllWrap?.classList.toggle('is-hidden', !showCloseAll);
     if (closeAllBtn) {
-      const hasTabs = docs.length > 0;
-      closeAllBtn.classList.toggle('is-hidden', !hasTabs);
-      closeAllBtn.disabled = !hasTabs;
+      closeAllBtn.classList.toggle('is-hidden', !showCloseAll);
+      closeAllBtn.disabled = !showCloseAll;
       closeAllBtn.title = hasTabs
-        ? `关闭当前 ${docs.length} 个已打开标签页`
-        : '关闭所有已打开的标签页';
+        ? `长按关闭当前 ${docs.length} 个已打开标签页`
+        : '长按关闭所有已打开的标签页';
     }
+    if (!showCloseAll) closeAllHoldCtrl?.cancel?.();
 
     listEl.innerHTML = '';
     if (!docs.length) {
@@ -2060,9 +2120,29 @@
     }
   });
 
-  $('closeAllTabsBtn')?.addEventListener('click', () => {
-    closeAllTabs();
+  const bindHoldConfirm = global.WSModules?.bindHoldConfirm;
+  const closeAllHoldCtrl = bindHoldConfirm?.({
+    button: $('closeAllTabsBtn'),
+    hintEl: $('closeAllHoldHint'),
+    duration: 1100,
+    tapThreshold: 240,
+    hintDuration: 1400,
+    doneDuration: 720,
+    hintText: '长按以关闭全部',
+    doneText: '',
+    doneAriaLabel: '已关闭全部标签页',
+    async onBeforeConfirm() {
+      if (state.activeController?.isDirty?.()) return await confirmDiscardIfDirty();
+      return true;
+    },
+    async onConfirm() {
+      await closeAllTabs({ skipDirtyCheck: true });
+    },
+    onDoneEnd: renderProducedStrip,
   });
+  if (!bindHoldConfirm) {
+    $('closeAllTabsBtn')?.addEventListener('click', () => closeAllTabs());
+  }
 
   async function pollProducedDocs() {
     try {
@@ -2238,6 +2318,7 @@
   });
 
   $('globalRefreshBtn').addEventListener('click', async () => {
+    global.WSPrismMotion?.triggerRefreshSpin?.($('globalRefreshBtn'));
     await reloadExpandedDirs();
     await pollProducedDocs();
     if (state.activeFile) await openFilePreview(state.activeFile, { preserveState: true });
@@ -2591,7 +2672,7 @@
     closeStagedPopover();
     closeAppearancePopover();
     state.updateModalOpen = true;
-    $('updateModal').classList.remove('is-hidden');
+    motionOpen($('updateModal'));
     $('updateCenterBtn').setAttribute('aria-expanded', 'true');
     renderUpdateCenterUi();
     await refreshUpdateStatus();
@@ -2604,7 +2685,7 @@
     if (isUpdateJobBusy()) return;
     resetUpdateDirtyConfirm();
     state.updateModalOpen = false;
-    $('updateModal').classList.add('is-hidden');
+    motionClose($('updateModal'));
     const btn = $('updateCenterBtn');
     btn.setAttribute('aria-expanded', 'false');
     if (restoreFocus) btn.focus();
@@ -2919,6 +3000,9 @@
       } catch {}
       try {
         trajectoryCtrl?.destroy?.();
+      } catch {}
+      try {
+        closeAllHoldCtrl?.destroy?.();
       } catch {}
     });
   })();

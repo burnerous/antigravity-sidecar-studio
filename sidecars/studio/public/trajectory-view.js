@@ -58,6 +58,7 @@
     showToast,
   }) {
     let steps = [];
+    let lastBadgeCount = null;
     let sig = '';
     let resolvedConvId = '';
     let lastConvId = '';
@@ -129,12 +130,17 @@
     }
 
     function updateBadge() {
-      if (steps.length > 0) {
-        badgeEl.textContent = String(steps.length);
+      const count = steps.length;
+      if (count > 0) {
+        badgeEl.textContent = String(count);
         badgeEl.classList.remove('is-hidden');
       } else {
         badgeEl.classList.add('is-hidden');
       }
+      if (lastBadgeCount !== null && count !== lastBadgeCount && count > 0) {
+        global.WSPrismMotion?.popBadge?.(badgeEl);
+      }
+      lastBadgeCount = count;
     }
 
     // 按需挂载折叠卡片正文：默认仅渲染 <summary>，用户真正点开时才生成正文节点与格式化 JSON
@@ -452,6 +458,7 @@
       for (const b of filterChipsEl.querySelectorAll('button[data-filter]')) {
         b.classList.toggle('is-active', b === btn);
       }
+      global.WSPrismMotion?.syncContainer?.(filterChipsEl);
       renderAll();
     });
 
@@ -464,11 +471,16 @@
       }, 120);
     });
 
-    refreshBtnEl?.addEventListener('click', () => refresh({ force: true }));
+    refreshBtnEl?.addEventListener('click', () => {
+      global.WSPrismMotion?.triggerRefreshSpin?.(refreshBtnEl);
+      refresh({ force: true });
+    });
 
     function setVisible(v) {
+      const wasVisible = visible;
       visible = Boolean(v);
       if (visible) {
+        if (!wasVisible) global.WSPrismMotion?.syncContainer?.(filterChipsEl, { snap: true });
         refresh();
         if (!pollTimer) {
           pollTimer = setInterval(() => {
