@@ -1,0 +1,693 @@
+/* Prism optics: shared by all palettes, with the existing layout and paper tokens. */
+:root[data-skin="prism"] {
+  --ws-paper-bg: #ffffff;
+  --ws-paper-fg: #1e293b;
+  --prism-ease-spring: cubic-bezier(0.22, 1.24, 0.36, 1);
+  --prism-ease-smooth: cubic-bezier(0.16, 1, 0.3, 1);
+  --prism-dur-fast: 150ms;
+  --prism-dur-med: 240ms;
+  --prism-hover-lift: translateY(-1px);
+  --prism-icon-scale: scale(1.055);
+  --prism-button-press: scale(0.98);
+  --prism-top-edge: inset 0 1px 0 var(--prism-specular);
+  --prism-focus-ring: 0 0 0 2px var(--ws-primary-soft);
+  --prism-tab-sheen: linear-gradient(180deg, var(--prism-accent-sheen), transparent 85%);
+  --prism-tab-active-bg: var(--prism-tab-sheen) var(--ws-primary);
+  --prism-tab-active-shadow: inset 0 1px 0 var(--prism-specular-strong), var(--prism-shadow-sm);
+  --prism-card-sheen: linear-gradient(155deg, var(--prism-specular) -40%, transparent 58%);
+  --prism-stage-bg: var(--prism-canvas-glow) var(--prism-stage-color);
+}
+
+/* The resolved palette wins over the light/dark fallback. */
+:root[data-skin="prism"],
+:root[data-skin="prism"][data-prism-resolved="obsidian-dark"] {
+  color-scheme: dark;
+  --ws-bg: #09090b;
+  --ws-fg: #ececf0;
+  --ws-surface: #0e0e11;
+  --ws-card: #16161a;
+  --ws-card-hover: #202026;
+  --ws-muted: #8e8e98;
+  --ws-border: rgb(255 255 255 / 8%);
+  --ws-border-strong: rgb(255 255 255 / 16%);
+  --ws-primary: #ececf2;
+  --ws-primary-fg: #09090b;
+  --ws-primary-soft: rgb(255 255 255 / 9%);
+  --ws-success: #34d399;
+  --ws-warn: #f5b95b;
+  --ws-danger: #f87171;
+  --prism-link: #93c5fd;
+  --prism-nav-active-bg: linear-gradient(180deg, rgb(255 255 255 / 13%), rgb(255 255 255 / 6%)) #1a1a20;
+  --prism-nav-active-fg: #f5f5f7;
+  --prism-nav-active-border: rgb(255 255 255 / 18%);
+  --prism-nav-active-shadow: inset 0 1px 0 rgb(255 255 255 / 22%), 0 2px 8px rgb(0 0 0 / 48%);
+  --prism-active-ring: rgb(255 255 255 / 28%);
+  --prism-active-glow: 0 0 0 2px rgb(255 255 255 / 8%);
+  --prism-gutter-bg: #111115;
+  --prism-step-user-accent: #d4d4dc;
+  --prism-canvas-glow:
+    radial-gradient(ellipse at 24% 0%, rgb(255 255 255 / 4%), transparent 52%),
+    radial-gradient(ellipse at 86% 4%, rgb(186 212 255 / 3%), transparent 44%);
+  --prism-glass-chrome: rgb(13 13 16 / 86%);
+  --prism-glass-overlay: rgb(17 17 21 / 92%);
+  --prism-specular: rgb(255 255 255 / 9%);
+  --prism-specular-strong: rgb(255 255 255 / 22%);
+  --prism-accent-sheen: rgb(255 255 255 / 14%);
+  --prism-shadow-sm: 0 2px 10px rgb(0 0 0 / 46%);
+  --prism-shadow-lg: 0 18px 44px rgb(0 0 0 / 68%), 0 4px 12px rgb(0 0 0 / 38%);
+  --prism-stage-color: #0b0b0e;
+  --prism-code-bg: #0c0c0f;
+}
+
+:root[data-skin="prism"][data-prism-resolved="warm-charcoal"] {
+  color-scheme: dark;
+  --ws-bg: #121110;
+  --ws-fg: #f3efe7;
+  --ws-surface: #1b1916;
+  --ws-card: #26221f;
+  --ws-card-hover: #332c25;
+  --ws-muted: #b4ab9d;
+  --ws-border: rgb(243 239 231 / 11%);
+  --ws-border-strong: rgb(235 198 146 / 26%);
+  --ws-primary: #d99b52;
+  --ws-primary-fg: #18130d;
+  --ws-primary-soft: rgb(217 155 82 / 18%);
+  --ws-success: #9fd099;
+  --ws-warn: #f5c574;
+  --ws-danger: #f59a8d;
+  --prism-link: var(--ws-primary);
+  --prism-nav-active-bg: var(--prism-tab-active-bg);
+  --prism-nav-active-fg: var(--ws-primary-fg);
+  --prism-nav-active-border: transparent;
+  --prism-nav-active-shadow: var(--prism-tab-active-shadow);
+  --prism-active-ring: var(--ws-primary);
+  --prism-active-glow: var(--prism-focus-ring);
+  --prism-gutter-bg: var(--ws-card);
+  --prism-step-user-accent: var(--ws-primary);
+  --prism-canvas-glow:
+    radial-gradient(ellipse at 26% 0%, rgb(205 140 65 / 16%), transparent 56%),
+    radial-gradient(ellipse at 86% 12%, rgb(174 108 78 / 10%), transparent 44%);
+  --prism-glass-chrome: rgb(27 25 22 / 84%);
+  --prism-glass-overlay: rgb(30 28 25 / 92%);
+  --prism-specular: rgb(255 240 214 / 10%);
+  --prism-specular-strong: rgb(255 240 214 / 33%);
+  --prism-accent-sheen: rgb(255 240 214 / 19%);
+  --prism-shadow-sm: 0 2px 8px rgb(9 7 5 / 31%);
+  --prism-shadow-lg: 0 16px 36px rgb(9 7 5 / 55%), 0 3px 10px rgb(9 7 5 / 27%);
+  --prism-stage-color: #201c18;
+  --prism-code-bg: #201c18;
+}
+
+:root[data-skin="prism"][data-theme="light"]:where(:not([data-prism-resolved])),
+:root[data-skin="prism"][data-prism-resolved="daylight-crystal"] {
+  color-scheme: light;
+  --ws-bg: #f3f6fc;
+  --ws-fg: #0f172a;
+  --ws-surface: #f9fbff;
+  --ws-card: #edf2fa;
+  --ws-card-hover: #e2e9f6;
+  --ws-muted: #475569;
+  --ws-border: rgb(15 23 42 / 9%);
+  --ws-border-strong: rgb(79 70 229 / 24%);
+  --ws-primary: #4f46e5;
+  --ws-primary-fg: #ffffff;
+  --ws-primary-soft: rgb(79 70 229 / 11%);
+  --ws-success: #166a4f;
+  --ws-warn: #80510d;
+  --ws-danger: #ad2945;
+  --prism-link: var(--ws-primary);
+  --prism-nav-active-bg: var(--prism-tab-active-bg);
+  --prism-nav-active-fg: var(--ws-primary-fg);
+  --prism-nav-active-border: transparent;
+  --prism-nav-active-shadow: var(--prism-tab-active-shadow);
+  --prism-active-ring: var(--ws-primary);
+  --prism-active-glow: var(--prism-focus-ring);
+  --prism-gutter-bg: var(--ws-card);
+  --prism-step-user-accent: var(--ws-primary);
+  --prism-canvas-glow:
+    radial-gradient(ellipse at 25% 0%, rgb(133 144 248 / 21%), transparent 55%),
+    radial-gradient(ellipse at 88% 9%, rgb(122 212 232 / 22%), transparent 48%);
+  --prism-glass-chrome: rgb(255 255 255 / 78%);
+  --prism-glass-overlay: rgb(255 255 255 / 88%);
+  --prism-specular: rgb(255 255 255 / 92%);
+  --prism-specular-strong: #ffffff;
+  --prism-accent-sheen: rgb(255 255 255 / 9%);
+  --prism-shadow-sm: 0 2px 8px rgb(34 55 102 / 12%);
+  --prism-shadow-lg: 0 14px 36px rgb(34 55 102 / 18%), 0 3px 10px rgb(34 55 102 / 10%);
+  --prism-stage-color: #e5ecf8;
+  --prism-code-bg: #edf2fb;
+}
+
+:root[data-skin="prism"][data-prism-resolved="warm-alabaster"] {
+  color-scheme: light;
+  --ws-bg: #f6f2ea;
+  --ws-fg: #1f1a14;
+  --ws-surface: #fcf9f2;
+  --ws-card: #f1eadf;
+  --ws-card-hover: #ebe0d1;
+  --ws-muted: #6b6154;
+  --ws-border: rgb(31 26 20 / 10%);
+  --ws-border-strong: rgb(180 107 43 / 26%);
+  --ws-primary: #9a521d;
+  --ws-primary-fg: #ffffff;
+  --ws-primary-soft: rgb(154 82 29 / 11%);
+  --ws-success: #32663f;
+  --ws-warn: #82520e;
+  --ws-danger: #a12f2e;
+  --prism-link: var(--ws-primary);
+  --prism-nav-active-bg: var(--prism-tab-active-bg);
+  --prism-nav-active-fg: var(--ws-primary-fg);
+  --prism-nav-active-border: transparent;
+  --prism-nav-active-shadow: var(--prism-tab-active-shadow);
+  --prism-active-ring: var(--ws-primary);
+  --prism-active-glow: var(--prism-focus-ring);
+  --prism-gutter-bg: var(--ws-card);
+  --prism-step-user-accent: var(--ws-primary);
+  --prism-canvas-glow:
+    radial-gradient(ellipse at 27% 0%, rgb(180 105 41 / 15%), transparent 54%),
+    radial-gradient(ellipse at 90% 6%, rgb(244 196 119 / 22%), transparent 46%);
+  --prism-glass-chrome: rgb(252 249 242 / 84%);
+  --prism-glass-overlay: rgb(252 249 242 / 93%);
+  --prism-specular: rgb(255 252 245 / 90%);
+  --prism-specular-strong: #fffdf8;
+  --prism-accent-sheen: rgb(255 252 245 / 7%);
+  --prism-shadow-sm: 0 2px 8px rgb(74 48 23 / 12%);
+  --prism-shadow-lg: 0 14px 36px rgb(74 48 23 / 18%), 0 3px 10px rgb(74 48 23 / 10%);
+  --prism-stage-color: #ebe2d5;
+  --prism-code-bg: #f1ebe1;
+}
+
+/* Keep the ambient wash under the app without trapping any overlay layers. */
+:root[data-skin="prism"] #ws-app {
+  isolation: isolate;
+}
+
+:root[data-skin="prism"] #ws-app::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background: var(--prism-canvas-glow);
+  pointer-events: none;
+}
+
+:root[data-skin="prism"] #ws-app > :where(
+  #wsStartupError, .ws-topbar, .ws-produced-strip, .ws-workbench, .ws-trajectory-pane
+) {
+  position: relative;
+}
+
+:root[data-skin="prism"] .ws-topbar {
+  z-index: 30;
+  background: var(--prism-glass-chrome);
+  box-shadow: var(--prism-top-edge), var(--prism-shadow-sm);
+}
+
+:root[data-skin="prism"] :is(
+  .ws-topbar, .ws-tabs-popover, .ws-staged-popover, .ws-appearance-popover,
+  .ws-context-menu, .ws-modal, .ws-quote-fab button, .ws-toast
+) {
+  -webkit-backdrop-filter: blur(14px) saturate(145%);
+  backdrop-filter: blur(14px) saturate(145%);
+}
+
+:root[data-skin="prism"] :is(
+  .ws-produced-strip, .ws-preview-header, .ws-subtoolbar, .ws-traj-toolbar,
+  .ws-sheet-tabs, .ws-slide-filmstrip, .ws-notes-drawer
+) {
+  background: var(--prism-glass-chrome);
+  box-shadow: var(--prism-top-edge);
+}
+
+:root[data-skin="prism"] :is(.ws-preview-pane, .ws-tree-pane) {
+  background: var(--prism-glass-chrome);
+}
+
+:root[data-skin="prism"] .ws-tree-pane {
+  box-shadow: var(--prism-top-edge);
+}
+
+:root[data-skin="prism"] :is(.ws-mode-tabs, .ws-seg) {
+  background: color-mix(in srgb, var(--ws-card) 80%, transparent);
+  box-shadow: var(--prism-top-edge);
+}
+
+:root[data-skin="prism"] :is(
+  .ws-mode-tab, .ws-icon-btn, .ws-chip-btn, .ws-btn-ghost, .ws-btn-primary,
+  .ws-btn-secondary, .ws-doc-pill, .ws-sheet-tab, .ws-seg button,
+  .ws-quote-fab button, .ws-appearance-option, .ws-appearance-palette
+) {
+  transition:
+    width var(--prism-dur-med) var(--prism-ease-smooth),
+    transform var(--prism-dur-med) var(--prism-ease-spring),
+    background-color var(--prism-dur-fast) var(--prism-ease-smooth),
+    border-color var(--prism-dur-fast) var(--prism-ease-smooth),
+    box-shadow var(--prism-dur-med) var(--prism-ease-smooth),
+    color var(--prism-dur-fast) var(--prism-ease-smooth);
+}
+
+:root[data-skin="prism"] :is(
+  .ws-mode-tab, .ws-icon-btn, .ws-chip-btn, .ws-btn-ghost, .ws-btn-primary,
+  .ws-btn-secondary, .ws-doc-pill, .ws-sheet-tab, .ws-seg button, .ws-quote-fab button,
+  .ws-appearance-option, .ws-appearance-palette, .ws-context-menu button
+):focus-visible {
+  outline: 2px solid var(--ws-primary);
+  outline-offset: 2px;
+}
+
+:root[data-skin="prism"] :is(
+  .ws-mode-tab, .ws-icon-btn, .ws-chip-btn, .ws-btn-ghost, .ws-btn-primary,
+  .ws-btn-secondary, .ws-sheet-tab, .ws-quote-fab button
+):active:enabled {
+  transform: var(--prism-button-press);
+}
+
+:root[data-skin="prism"] :is(.ws-mode-tab.is-active, .ws-sheet-tab.is-active, .ws-seg button.is-active) {
+  background: var(--prism-nav-active-bg);
+  color: var(--prism-nav-active-fg);
+  box-shadow: var(--prism-nav-active-shadow);
+}
+
+/* Mode tabs and segments get their hairline from the inset shadow. */
+:root[data-skin="prism"]:is([data-prism-resolved="obsidian-dark"], :not([data-prism-resolved], [data-theme="light"])) :is(.ws-mode-tab.is-active, .ws-seg button.is-active) {
+  box-shadow: var(--prism-nav-active-shadow), inset 0 0 0 1px var(--prism-nav-active-border);
+}
+
+:root[data-skin="prism"]:is([data-prism-resolved="obsidian-dark"], :not([data-prism-resolved], [data-theme="light"])) .ws-sheet-tab.is-active {
+  border-color: var(--prism-nav-active-border);
+}
+
+:root[data-skin="prism"] :is(.ws-btn-primary, .ws-md-block-btn.is-primary, .ws-img-primary) {
+  background: var(--prism-tab-active-bg);
+  color: var(--ws-primary-fg);
+  box-shadow: var(--prism-tab-active-shadow);
+}
+
+:root[data-skin="prism"] :is(.ws-btn-primary, .ws-md-block-btn.is-primary, .ws-img-primary):hover:enabled {
+  background: var(--prism-tab-active-bg);
+  box-shadow: var(--prism-tab-active-shadow), var(--prism-focus-ring);
+}
+
+:root[data-skin="prism"] .ws-mode-tab.is-active .ws-badge {
+  background: var(--ws-primary);
+  color: var(--ws-primary-fg);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ws-primary-fg) 28%, transparent);
+}
+
+:root[data-skin="prism"]:is([data-prism-resolved="obsidian-dark"], :not([data-prism-resolved], [data-theme="light"])) .ws-mode-tab.is-active .ws-badge {
+  background: color-mix(in srgb, var(--prism-nav-active-fg) 16%, transparent);
+  color: var(--prism-nav-active-fg);
+  box-shadow: inset 0 0 0 1px var(--prism-nav-active-border);
+}
+
+:root[data-skin="prism"] .ws-icon-btn.is-active {
+  border-color: var(--prism-active-ring);
+  background: var(--ws-primary-soft);
+  color: var(--ws-fg);
+  box-shadow: var(--prism-top-edge);
+}
+
+:root[data-skin="prism"] .ws-btn-secondary {
+  background: var(--ws-card);
+  box-shadow: var(--prism-top-edge);
+}
+
+:root[data-skin="prism"] :is(.ws-btn-secondary, .ws-sheet-tab:not(.is-active)):hover:enabled {
+  background-color: var(--ws-card-hover);
+  border-color: var(--ws-border-strong);
+  color: var(--ws-fg);
+}
+
+:root[data-skin="prism"] .ws-doc-pill {
+  background: var(--prism-card-sheen) var(--ws-card);
+  box-shadow: var(--prism-top-edge);
+}
+
+:root[data-skin="prism"] .ws-doc-pill:hover {
+  background: var(--prism-card-sheen) var(--ws-card-hover);
+  transform: var(--prism-hover-lift);
+}
+
+:root[data-skin="prism"] .ws-doc-pill.is-active {
+  background: var(--prism-card-sheen) var(--ws-primary-soft);
+  border-color: var(--prism-active-ring);
+  box-shadow: var(--prism-top-edge), var(--prism-active-glow);
+}
+
+:root[data-skin="prism"] .ws-splitter {
+  transition:
+    background-color var(--prism-dur-fast) var(--prism-ease-smooth),
+    box-shadow var(--prism-dur-fast) var(--prism-ease-smooth);
+}
+
+:root[data-skin="prism"] .ws-splitter:is(:hover, .is-dragging) {
+  background: var(--ws-primary);
+  box-shadow: 0 0 9px var(--ws-primary-soft);
+}
+
+:root[data-skin="prism"] .ws-tree-row {
+  transition:
+    background-color var(--prism-dur-fast) var(--prism-ease-smooth),
+    box-shadow var(--prism-dur-med) var(--prism-ease-smooth);
+}
+
+:root[data-skin="prism"] .ws-tree-row:hover {
+  background-color: var(--ws-card-hover);
+}
+
+:root[data-skin="prism"] .ws-tree-row.is-active {
+  background-color: var(--ws-primary-soft);
+  box-shadow: inset 2px 0 var(--prism-active-ring), var(--prism-top-edge);
+}
+
+:root[data-skin="prism"] :is(.ws-doc-pill, .ws-tree-row) .ws-ios-squircle {
+  transition: transform var(--prism-dur-med) var(--prism-ease-spring);
+}
+
+:root[data-skin="prism"] :is(.ws-doc-pill:hover .ws-ios-squircle, .ws-tree-row:hover .ws-tree-icon .ws-ios-squircle) {
+  transform: var(--prism-icon-scale);
+}
+
+:root[data-skin="prism"] .ws-search-wrap:focus-within {
+  box-shadow: var(--prism-focus-ring);
+}
+
+@media (max-width: 519px) {
+  :root[data-skin="prism"] .ws-tree-pane {
+    background: var(--prism-glass-overlay);
+    box-shadow: var(--prism-top-edge), var(--prism-shadow-lg);
+    -webkit-backdrop-filter: blur(14px) saturate(145%);
+    backdrop-filter: blur(14px) saturate(145%);
+    transition: transform var(--prism-dur-med) var(--prism-ease-smooth);
+  }
+}
+
+:root[data-skin="prism"] .ws-empty-welcome {
+  width: min(520px, calc(100% - 32px));
+  border: 1px solid var(--ws-border);
+  border-radius: 14px;
+  background: var(--prism-card-sheen) var(--prism-glass-chrome);
+  box-shadow: var(--prism-top-edge), var(--prism-shadow-sm), 0 0 34px var(--ws-primary-soft);
+}
+
+/* Office renderers keep their white document surfaces. */
+:root[data-skin="prism"] :is(.ws-docx-stage, .ws-pdf-scroll, .ws-slide-stage) {
+  background: var(--prism-stage-bg);
+}
+
+:root[data-skin="prism"] .ws-docx-zoom-box :is(section.docx, section.ws-docx) {
+  box-shadow: var(--prism-shadow-lg) !important;
+}
+
+:root[data-skin="prism"] :is(
+  .ws-pdf-scroll .pdfViewer .page, .ws-slide-stage .pdfViewer .page, .ws-slide-canvas-box
+) {
+  box-shadow: var(--prism-shadow-lg);
+}
+
+:root[data-skin="prism"] :is(.ws-pdf-outline, .ws-reader-toc) {
+  background: var(--prism-card-sheen) var(--ws-surface);
+  box-shadow: var(--prism-top-edge);
+}
+
+:root[data-skin="prism"] .ws-slide-thumb.is-active {
+  box-shadow: var(--prism-focus-ring), var(--prism-shadow-sm);
+}
+
+/* Markdown, reader and source code. */
+:root[data-skin="prism"] :is(.ws-md-body, .ws-reader-paper) {
+  background: var(--prism-card-sheen) var(--ws-bg);
+  color: var(--ws-fg);
+}
+
+:root[data-skin="prism"] :is(.ws-md-body a, .ws-reader-paper a, .ws-update-ext-link, .ws-update-changelog a) {
+  color: var(--prism-link);
+}
+
+:root[data-skin="prism"] :is(.ws-md-body pre, .ws-reader-paper pre, .ws-code-wrap pre, .ws-quote-excerpt, .ws-staged-excerpt) {
+  background: var(--prism-code-bg);
+  border: 1px solid var(--ws-border-strong);
+  box-shadow: var(--prism-top-edge);
+}
+
+:root[data-skin="prism"] :is(.ws-md-body, .ws-reader-paper, .ws-code-wrap) pre > code.hljs {
+  background: transparent;
+}
+
+:root[data-skin="prism"] :is(.ws-code-wrap, .ws-code-table) {
+  background: var(--prism-code-bg);
+  box-shadow: var(--prism-top-edge);
+}
+
+:root[data-skin="prism"] .ws-code-table td.ws-ln {
+  background-color: var(--prism-gutter-bg);
+}
+
+:root[data-skin="prism"] :is(.ws-md-body, .ws-reader-paper) blockquote {
+  border-inline-start: 2px solid var(--ws-primary);
+  border-radius: 0 6px 6px 0;
+  background: var(--prism-card-sheen) var(--ws-card);
+  color: var(--ws-muted);
+  box-shadow: var(--prism-top-edge);
+}
+
+:root[data-skin="prism"] :is(.ws-md-body, .ws-reader-paper) :is(th, td) {
+  border-color: var(--ws-border-strong);
+}
+
+:root[data-skin="prism"] :is(.ws-md-body, .ws-reader-paper) th {
+  background: var(--ws-card);
+}
+
+:root[data-skin="prism"] :is(.ws-md-live-block:not(.is-editing), .ws-md-body.is-editable .ws-md-rendered-block):hover {
+  background: var(--ws-primary-soft);
+}
+
+:root[data-skin="prism"] :is(.ws-md-live-block:not(.is-editing), .ws-md-body.is-editable .ws-md-rendered-block):hover::before {
+  background: color-mix(in srgb, var(--ws-primary) 70%, transparent);
+}
+
+:root[data-skin="prism"] .ws-md-block-bar {
+  border-bottom-color: var(--ws-border-strong);
+}
+
+/* Spreadsheet headers stay opaque so scrolled cells cannot show through. */
+:root[data-skin="prism"] .ws-xlsx-wrap {
+  background: var(--ws-bg);
+}
+
+:root[data-skin="prism"] .ws-xlsx-table :is(th, td) {
+  border-color: var(--ws-border);
+}
+
+:root[data-skin="prism"] .ws-xlsx-table thead th {
+  background: linear-gradient(180deg, var(--ws-card-hover), var(--ws-card));
+  color: var(--ws-fg);
+  box-shadow: var(--prism-top-edge);
+}
+
+:root[data-skin="prism"] .ws-xlsx-table .ws-xlsx-row-idx {
+  background: var(--ws-card);
+  color: var(--ws-muted);
+}
+
+:root[data-skin="prism"] .ws-xlsx-table td.is-selected {
+  outline-color: var(--ws-primary);
+  box-shadow: inset 0 0 0 1px var(--ws-primary-soft);
+}
+
+:root[data-skin="prism"] .ws-xlsx-table.is-freeze-col1 td.ws-col-1.is-selected {
+  background: linear-gradient(var(--ws-primary-soft), var(--ws-primary-soft)) var(--ws-surface) !important;
+}
+
+:root[data-skin="prism"] .ws-sheet-tab {
+  border-radius: 999px;
+}
+
+/* Media shells inherit the palette while native media keeps its own colors. */
+:root[data-skin="prism"] :is(.ws-video-shell, .ws-img-editor-shell) {
+  background: var(--prism-stage-bg);
+}
+
+:root[data-skin="prism"] .ws-video-frame {
+  background: var(--ws-surface);
+  box-shadow: var(--prism-top-edge), var(--prism-shadow-lg);
+}
+
+:root[data-skin="prism"] .ws-img-editor-shell {
+  --ws-img-glass: var(--prism-glass-overlay);
+  --ws-img-shadow: var(--prism-top-edge), var(--prism-shadow-lg);
+  --ws-img-check: var(--ws-card-hover);
+}
+
+:root[data-skin="prism"] .ws-img-viewport {
+  background: transparent;
+}
+
+/* Trajectory cards use a sheen and inset edge so long lists stay cheap to paint. */
+:root[data-skin="prism"] .ws-step-card {
+  --prism-step-accent: var(--ws-border-strong);
+  --prism-step-fill: var(--prism-glass-chrome);
+  background: var(--prism-card-sheen) var(--prism-step-fill);
+  border-left-color: var(--prism-step-accent);
+  box-shadow: var(--prism-top-edge);
+  content-visibility: auto;
+  contain: layout style;
+}
+
+:root[data-skin="prism"] .ws-step-card.kind-user {
+  --prism-step-accent: var(--prism-step-user-accent);
+  --prism-step-fill: color-mix(in srgb, var(--ws-primary) 8%, var(--prism-glass-chrome));
+}
+
+:root[data-skin="prism"] .ws-step-card.kind-assistant {
+  --prism-step-accent: var(--ws-success);
+  --prism-step-fill: color-mix(in srgb, var(--ws-success) 5%, var(--prism-glass-chrome));
+}
+
+:root[data-skin="prism"] .ws-step-card.kind-error {
+  --prism-step-accent: var(--ws-danger);
+  --prism-step-fill: color-mix(in srgb, var(--ws-danger) 8%, var(--prism-glass-chrome));
+}
+
+:root[data-skin="prism"] .ws-step-role {
+  background: color-mix(in srgb, var(--prism-step-accent) 11%, var(--ws-card));
+  border-color: color-mix(in srgb, var(--prism-step-accent) 40%, var(--ws-border));
+  color: var(--ws-fg);
+  box-shadow: var(--prism-top-edge);
+}
+
+:root[data-skin="prism"] .ws-step-details {
+  background: var(--ws-card);
+  border-color: var(--ws-border-strong);
+  box-shadow: var(--prism-top-edge);
+}
+
+:root[data-skin="prism"] .ws-step-details summary {
+  border-radius: 5px;
+}
+
+:root[data-skin="prism"] .ws-step-details summary:hover {
+  background: var(--ws-card-hover);
+}
+
+:root[data-skin="prism"] .ws-step-details[open] summary {
+  color: var(--ws-fg);
+}
+
+:root[data-skin="prism"] .ws-step-details-body {
+  background: var(--prism-code-bg);
+  border-radius: 0 0 5px 5px;
+}
+
+/* Menus, appearance controls, and feedback. */
+:root[data-skin="prism"] :is(.ws-tabs-popover, .ws-staged-popover, .ws-appearance-popover, .ws-context-menu, .ws-modal, .ws-toast) {
+  color: var(--ws-fg);
+  background: var(--prism-glass-overlay);
+  border: 1px solid var(--ws-border-strong);
+  box-shadow: var(--prism-top-edge), var(--prism-shadow-lg);
+}
+
+@keyframes wsPrismPopIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+:root[data-skin="prism"] :is(.ws-tabs-popover, .ws-staged-popover, .ws-appearance-popover, .ws-context-menu, .ws-modal, .ws-quote-fab) {
+  animation: wsPrismPopIn var(--prism-dur-med) var(--prism-ease-spring);
+}
+
+:root[data-skin="prism"] :is(.ws-tabs-popover, .ws-staged-popover, .ws-appearance-popover) {
+  transform-origin: top right;
+}
+
+:root[data-skin="prism"] .ws-context-menu {
+  transform-origin: top left;
+}
+
+:root[data-skin="prism"] .ws-quote-fab button {
+  background: var(--prism-tab-sheen) color-mix(in srgb, var(--ws-primary) 96%, transparent);
+  border-color: var(--prism-specular-strong);
+  color: var(--ws-primary-fg);
+  box-shadow: var(--prism-tab-active-shadow);
+}
+
+:root[data-skin="prism"] .ws-quote-fab button:hover:enabled {
+  background-color: var(--ws-primary);
+  box-shadow: var(--prism-tab-active-shadow), var(--prism-focus-ring);
+}
+
+:root[data-skin="prism"]:is([data-prism-resolved="obsidian-dark"], :not([data-prism-resolved], [data-theme="light"])) .ws-quote-fab button {
+  background: var(--prism-tab-active-bg);
+}
+
+:root[data-skin="prism"] :is(.ws-appearance-option, .ws-appearance-palette) {
+  background-color: var(--ws-card);
+  border-color: var(--ws-border);
+  color: var(--ws-fg);
+}
+
+:root[data-skin="prism"] :is(.ws-appearance-option, .ws-appearance-palette):hover:enabled {
+  background-color: var(--ws-card-hover);
+  border-color: var(--ws-border-strong);
+}
+
+:root[data-skin="prism"] :is(.ws-appearance-option, .ws-appearance-palette):is(
+  .is-active, .is-selected, [aria-pressed="true"], [aria-checked="true"], [aria-selected="true"]
+) {
+  background-color: var(--ws-primary-soft);
+  border-color: var(--prism-active-ring);
+  box-shadow: var(--prism-top-edge), var(--prism-active-glow);
+}
+
+:root[data-skin="prism"] :is(.ws-tabs-popover-search, .ws-staged-header, .ws-staged-footer, .ws-modal-footer) {
+  background: var(--prism-card-sheen) var(--ws-card);
+}
+
+:root[data-skin="prism"] :is(.ws-staged-card, .ws-update-summary) {
+  background: var(--prism-card-sheen) var(--ws-card);
+  box-shadow: var(--prism-top-edge);
+}
+
+:root[data-skin="prism"] .ws-update-modal .ws-modal-header {
+  background: var(--prism-card-sheen) var(--prism-glass-chrome);
+}
+
+:root[data-skin="prism"] .ws-update-status-pill.is-latest {
+  color: var(--ws-fg);
+}
+
+:root[data-skin="prism"] .ws-update-progress-fill {
+  background: var(--prism-tab-active-bg);
+  transition: width var(--prism-dur-med) var(--prism-ease-smooth);
+}
+
+:root[data-skin="prism"][data-motion="reduced"] {
+  --prism-hover-lift: none;
+  --prism-icon-scale: none;
+  --prism-button-press: none;
+}
+
+:root[data-skin="prism"][data-motion="reduced"] * {
+  transition-duration: 0.01ms !important;
+  animation: none !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root[data-skin="prism"] {
+    --prism-hover-lift: none;
+    --prism-icon-scale: none;
+    --prism-button-press: none;
+  }
+
+  :root[data-skin="prism"] * {
+    transition-duration: 0.01ms !important;
+    animation: none !important;
+  }
+}

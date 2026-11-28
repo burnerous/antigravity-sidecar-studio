@@ -354,6 +354,11 @@
       <path d="M8.5 10.4L12 13.9l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round"/>
       <path d="M5.2 15.2v2.4A2.2 2.2 0 0 0 7.4 19.8h9.2a2.2 2.2 0 0 0 2.2-2.2v-2.4" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round"/>
     </symbol>
+    <symbol id="wsi-ui-appearance" viewBox="0 0 24 24">
+      <path d="M12 3.5l8.5 8.5-8.5 8.5L3.5 12 12 3.5z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+      <path d="M12 3.5v17M3.5 12h17M7.8 7.8l8.4 8.4M16.2 7.8l-8.4 8.4" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round"/>
+      <path d="M19.5 3.2v3.1M18 4.75h3" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+    </symbol>
     <symbol id="wsi-ui-check" viewBox="0 0 24 24">
       <path d="M5.5 12.5l4.2 4.2 8.8-9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
     </symbol>

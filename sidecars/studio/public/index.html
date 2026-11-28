@@ -30,7 +30,40 @@
   </script>
   <link rel="stylesheet" href="/vendor/pdfjs/pdf_viewer.css">
   <link id="hljs-theme" rel="stylesheet" href="/vendor/hljs-dark.css">
+  <script>
+    (function () {
+      var docEl = document.documentElement;
+      var stored = null;
+      try {
+        stored = JSON.parse(window.localStorage.getItem('ws-studio-appearance') || 'null');
+      } catch (_) {}
+
+      var validSkins = ['default', 'prism'];
+      var validVariants = ['auto', 'obsidian-dark', 'warm-charcoal', 'daylight-crystal', 'warm-alabaster'];
+      var validMotions = ['full', 'reduced'];
+      var skin = stored && validSkins.indexOf(stored.skin) !== -1 ? stored.skin : 'default';
+      var prismVariant = stored && validVariants.indexOf(stored.prismVariant) !== -1 ? stored.prismVariant : 'auto';
+      var motion = stored && validMotions.indexOf(stored.motion) !== -1 ? stored.motion : 'full';
+
+      docEl.dataset.skin = skin;
+      docEl.dataset.prismVariant = prismVariant;
+      docEl.dataset.motion = motion;
+
+      if (skin === 'prism') {
+        var resolved = prismVariant === 'auto'
+          ? (docEl.dataset.theme === 'light' ? 'daylight-crystal' : 'obsidian-dark')
+          : prismVariant;
+        var effectiveTheme = resolved === 'daylight-crystal' || resolved === 'warm-alabaster' ? 'light' : 'dark';
+        docEl.dataset.prismResolved = resolved;
+        docEl.dataset.theme = effectiveTheme;
+        document.getElementById('hljs-theme').href = effectiveTheme === 'light'
+          ? '/vendor/hljs-light.css'
+          : '/vendor/hljs-dark.css';
+      }
+    })();
+  </script>
   <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/themes/obsidian-prism.css">
 </head>
 <body>
   <div id="ws-app">
@@ -66,6 +99,9 @@
           <span id="stagedCommentsCount" class="ws-badge">0</span>
         </button>
         <select id="rootSelector" class="ws-select is-hidden" title="切换工作区根目录" aria-label="切换工作区根目录"></select>
+        <button id="appearanceBtn" class="ws-icon-btn ws-appearance-btn" type="button" title="切换工作台外观风格" aria-label="外观风格" aria-controls="appearancePopover" aria-haspopup="dialog" aria-expanded="false">
+          <span class="ws-chip-icon" data-ws-icon="ui-appearance" data-size="14"></span>
+        </button>
         <button id="updateCenterBtn" class="ws-icon-btn ws-update-btn" type="button" title="检查 Sidecar Studio 更新" aria-label="检查更新" aria-haspopup="dialog" aria-expanded="false">
           <span class="ws-chip-icon" data-ws-icon="ui-update" data-size="14"></span>
           <span id="updateDot" class="ws-update-dot is-hidden" aria-hidden="true"></span>
@@ -277,6 +313,84 @@
           <button id="stagedCommentsCopyBtn" class="ws-btn-secondary" type="button"><span data-ws-icon="ui-copy" data-size="13"></span><span>复制全部</span></button>
           <button id="stagedCommentsSendBtn" class="ws-btn-primary" type="button"><span data-ws-icon="ui-send" data-size="13"></span><span id="stagedCommentsSendText">合并发给 AI</span></button>
         </div>
+      </div>
+    </div>
+
+    <div id="appearancePopover" class="ws-appearance-popover is-hidden" role="dialog" aria-labelledby="appearancePopoverTitle" aria-modal="false">
+      <div class="ws-appearance-header">
+        <h2 id="appearancePopoverTitle" class="ws-appearance-title">外观风格</h2>
+        <button id="appearanceCloseBtn" class="ws-icon-btn" type="button" aria-label="关闭外观风格设置">
+          <span data-ws-icon="ui-close" data-size="14"></span>
+        </button>
+      </div>
+      <div class="ws-appearance-body">
+        <section class="ws-appearance-section" aria-labelledby="appearanceSkinLabel">
+          <h3 id="appearanceSkinLabel" class="ws-appearance-section-label">主题风格</h3>
+          <div class="ws-appearance-list">
+            <button class="ws-appearance-option" type="button" data-appearance-skin="default" data-appearance-variant="auto" aria-pressed="false">
+              <span class="ws-appearance-swatch is-default" aria-hidden="true"></span>
+              <span class="ws-appearance-option-meta">
+                <span class="ws-appearance-option-name">原生默认</span>
+                <span class="ws-appearance-option-desc">跟随 Antigravity 宿主原色</span>
+              </span>
+              <span class="ws-appearance-check" data-ws-icon="ui-check" data-size="14" aria-hidden="true"></span>
+            </button>
+            <button class="ws-appearance-option" type="button" data-appearance-skin="prism" data-appearance-variant="auto" aria-pressed="false">
+              <span class="ws-appearance-swatch is-prism-auto" aria-hidden="true"></span>
+              <span class="ws-appearance-option-meta">
+                <span class="ws-appearance-option-name">光学棱镜 · 自动</span>
+                <span class="ws-appearance-option-desc">随宿主明暗切换深曜黑 / 日光晶白</span>
+              </span>
+              <span class="ws-appearance-check" data-ws-icon="ui-check" data-size="14" aria-hidden="true"></span>
+            </button>
+          </div>
+        </section>
+        <div class="ws-appearance-divider" role="separator"></div>
+        <section class="ws-appearance-section" aria-labelledby="appearancePaletteLabel">
+          <h3 id="appearancePaletteLabel" class="ws-appearance-section-label">光学棱镜色板</h3>
+          <div class="ws-appearance-grid">
+            <button class="ws-appearance-palette" type="button" data-appearance-skin="prism" data-appearance-variant="obsidian-dark" aria-pressed="false">
+              <span class="ws-appearance-swatch is-obsidian-dark" aria-hidden="true"></span>
+              <span class="ws-appearance-palette-meta">
+                <span class="ws-appearance-option-name">深曜黑</span>
+                <span class="ws-appearance-option-desc">Obsidian Dark</span>
+              </span>
+              <span class="ws-appearance-check" data-ws-icon="ui-check" data-size="14" aria-hidden="true"></span>
+            </button>
+            <button class="ws-appearance-palette" type="button" data-appearance-skin="prism" data-appearance-variant="warm-charcoal" aria-pressed="false">
+              <span class="ws-appearance-swatch is-warm-charcoal" aria-hidden="true"></span>
+              <span class="ws-appearance-palette-meta">
+                <span class="ws-appearance-option-name">暖炭灰</span>
+                <span class="ws-appearance-option-desc">Warm Charcoal</span>
+              </span>
+              <span class="ws-appearance-check" data-ws-icon="ui-check" data-size="14" aria-hidden="true"></span>
+            </button>
+            <button class="ws-appearance-palette" type="button" data-appearance-skin="prism" data-appearance-variant="daylight-crystal" aria-pressed="false">
+              <span class="ws-appearance-swatch is-daylight-crystal" aria-hidden="true"></span>
+              <span class="ws-appearance-palette-meta">
+                <span class="ws-appearance-option-name">日光晶白</span>
+                <span class="ws-appearance-option-desc">Daylight Crystal</span>
+              </span>
+              <span class="ws-appearance-check" data-ws-icon="ui-check" data-size="14" aria-hidden="true"></span>
+            </button>
+            <button class="ws-appearance-palette" type="button" data-appearance-skin="prism" data-appearance-variant="warm-alabaster" aria-pressed="false">
+              <span class="ws-appearance-swatch is-warm-alabaster" aria-hidden="true"></span>
+              <span class="ws-appearance-palette-meta">
+                <span class="ws-appearance-option-name">暖雪花石</span>
+                <span class="ws-appearance-option-desc">Warm Alabaster</span>
+              </span>
+              <span class="ws-appearance-check" data-ws-icon="ui-check" data-size="14" aria-hidden="true"></span>
+            </button>
+          </div>
+        </section>
+        <div class="ws-appearance-divider" role="separator"></div>
+        <label class="ws-appearance-toggle-row" for="appearanceReducedMotionInput">
+          <input id="appearanceReducedMotionInput" type="checkbox">
+          <span class="ws-appearance-toggle-text">
+            <span class="ws-appearance-option-name">减弱弹簧动效</span>
+            <span class="ws-appearance-option-desc">关闭过渡弹跳，优先极致响应</span>
+          </span>
+        </label>
       </div>
     </div>
 

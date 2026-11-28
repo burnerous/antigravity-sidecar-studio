@@ -47,6 +47,7 @@ import {
   readTranscriptSteps,
   resolveConversationId,
 } from './lib/transcript.mjs';
+import { UiPrefsStore } from './lib/ui-prefs.mjs';
 import {
   compareSemver,
   computeCrc32,
@@ -87,6 +88,7 @@ const SAVE_AS_IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.webp']);
 const MAX_RAW_FILE_BYTES = 128 * 1024 * 1024; // 128 MB safety guard
 const MAX_HASH_VERSION_BYTES = 32 * 1024 * 1024; // 32 MB version digest limit
 const MAX_POST_BODY_BYTES = 180 * 1024 * 1024; // Early HTTP POST body limit (covers base64 up to 128 MiB)
+const UI_PREFS_PATH = '/api/ui/prefs';
 const BASE64_FLAT_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 
 function isValidBase64(str) {
@@ -168,6 +170,30 @@ function handleApiError(ResponseClass, err) {
   return jsonResponse(ResponseClass, { success: false, error: err?.message || 'Internal error' }, status);
 }
 
+function preserveUiPrefsPatch(req) {
+  // The SDK merges JSON into an object. Wrap the original value so the route can validate its shape.
+  const sdkRequest = Object.create(req);
+  sdkRequest.on = (event, listener) => {
+    if (event === 'data') {
+      let body = '';
+      req.on('data', (chunk) => { body += chunk; });
+      req.prependListener('end', () => {
+        try {
+          JSON.parse(body);
+        } catch {
+          // Invalid JSON is rejected by the same validator as a missing JSON object.
+          body = 'null';
+        }
+        listener(`{"uiPrefsPatch":${body}}`);
+      });
+    } else {
+      req.on(event, listener);
+    }
+    return sdkRequest;
+  };
+  return sdkRequest;
+}
+
 export function createStudioServer({
   SidecarApp,
   Response: ResponseClass,
@@ -205,6 +231,7 @@ export function createStudioServer({
     onRestart,
     ...(updaterOptions || {}),
   });
+  const uiPrefs = new UiPrefsStore({ dataDir: resolvedDataDir });
 
   const staticInfo = registerAllStaticAssets(app, ResponseClass, studioDir);
 
@@ -353,8 +380,11 @@ export function createStudioServer({
           }
         });
       }
+      const sdkRequest = req.method === 'POST' && new URL(req.url, 'http://127.0.0.1').pathname === UI_PREFS_PATH
+        ? preserveUiPrefsPatch(req)
+        : req;
       for (const listener of existingListeners) {
-        listener.call(httpServer, req, res);
+        listener.call(httpServer, sdkRequest, res);
       }
     });
     return httpServer;
@@ -1191,12 +1221,38 @@ export function createStudioServer({
     }
   });
 
+  app.api(
+    UI_PREFS_PATH,
+    () => {
+      try {
+        return jsonResponse(ResponseClass, { success: true, prefs: uiPrefs.load() });
+      } catch (err) {
+        return handleApiError(ResponseClass, err);
+      }
+    },
+    'GET'
+  );
+
+  app.api(
+    UI_PREFS_PATH,
+    (data) => {
+      try {
+        const prefs = uiPrefs.update(data.uiPrefsPatch);
+        return jsonResponse(ResponseClass, { success: true, prefs });
+      } catch (err) {
+        return handleApiError(ResponseClass, err);
+      }
+    },
+    'POST'
+  );
+
   return {
     app,
     security,
     watcher,
     converter,
     updater,
+    uiPrefs,
     staticInfo,
     close: async () => {
       watcher.closeAll();
@@ -1217,6 +1273,8 @@ async function runSelfTests() {
   const convId = '11111111-2222-3333-4444-555555555555';
   const logsDir = join(appDataDir, 'brain', convId, '.system_generated', 'logs');
   const cacheDir = join(tmpRoot, 'cache');
+  const prefsDataDir = join(tmpRoot, 'updater-data');
+  const prefsPath = join(prefsDataDir, 'ui-prefs.json');
 
   mkdirSync(wsDir, { recursive: true });
   mkdirSync(ignoredDir, { recursive: true });
@@ -1311,6 +1369,7 @@ async function runSelfTests() {
   assert.ok(studio.staticInfo.count > 100, 'Expected local static + cmaps routes registered');
 
   let httpServer;
+  let testSummary;
   try {
     httpServer = await studio.app.run();
     const port = httpServer.address().port;
@@ -1423,6 +1482,76 @@ async function runSelfTests() {
     assert.equal(rHealth.status, 200);
     const healthJson = await rHealth.json();
     assert.equal(healthJson.success, true);
+
+    // UI preferences (defaults, authentication, validation, and disk persistence).
+    const prefsUrl = `${base}/api/ui/prefs`;
+    const getUiPrefs = async () => {
+      const response = await fetch(prefsUrl);
+      assert.equal(response.status, 200, 'GET UI preferences');
+      return response.json();
+    };
+    const postUiPrefsJson = (body, auth = true) =>
+      fetch(prefsUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(auth ? { 'X-Sidecar-Token': token } : {}),
+        },
+        body,
+      });
+    const postUiPrefs = (patch, auth = true) => postUiPrefsJson(JSON.stringify(patch), auth);
+    const defaultPrefs = { skin: 'default', prismVariant: 'auto', motion: 'full' };
+    assert.deepEqual(await getUiPrefs(), { success: true, prefs: defaultPrefs });
+    assert.equal(studio.uiPrefs.getFilePath(), prefsPath, 'UI preferences stay inside the test root');
+    assert.equal(existsSync(prefsPath), false, 'reading defaults does not create a file');
+
+    const customPrefs = { skin: 'prism', prismVariant: 'warm-charcoal', motion: 'reduced' };
+    const prefsUnauth = await postUiPrefs(customPrefs, false);
+    assert.equal(prefsUnauth.status, 401, 'POST UI preferences requires a token');
+    assert.equal(existsSync(prefsPath), false, 'unauthorized POST does not create a file');
+
+    const prefsSaved = await postUiPrefs(customPrefs);
+    assert.equal(prefsSaved.status, 200, 'POST UI preferences');
+    assert.deepEqual(await prefsSaved.json(), { success: true, prefs: customPrefs });
+    assert.deepEqual(JSON.parse(readFileSync(prefsPath, 'utf8')), customPrefs);
+    assert.deepEqual(await getUiPrefs(), { success: true, prefs: customPrefs });
+    assert.deepEqual(new UiPrefsStore({ dataDir: prefsDataDir }).load(), customPrefs);
+
+    const partialPrefs = await postUiPrefs({ prismVariant: 'daylight-crystal' });
+    const mergedPrefs = { skin: 'prism', prismVariant: 'daylight-crystal', motion: 'reduced' };
+    assert.equal(partialPrefs.status, 200, 'POST partial UI preferences');
+    assert.deepEqual(await partialPrefs.json(), { success: true, prefs: mergedPrefs });
+    const persistedPrefs = readFileSync(prefsPath, 'utf8');
+    assert.deepEqual(JSON.parse(persistedPrefs), mergedPrefs);
+
+    const invalidPrefs = [
+      [{ skin: 'neon' }, 'Invalid skin value'],
+      [{ prismVariant: 'bad' }, 'Invalid prismVariant value'],
+      [{ skin: 'default', motion: 'turbo' }, 'Invalid motion value'],
+      [{ foo: 'bar' }, 'Unsupported UI preference key: foo'],
+      [null, 'Invalid UI preferences payload: expected a JSON object'],
+      [[], 'Invalid UI preferences payload: expected a JSON object'],
+    ];
+    for (const [patch, error] of invalidPrefs) {
+      const response = await postUiPrefs(patch);
+      assert.equal(response.status, 400, `rejects UI preferences ${JSON.stringify(patch)}`);
+      assert.deepEqual(await response.json(), { success: false, error });
+      assert.equal(readFileSync(prefsPath, 'utf8'), persistedPrefs);
+    }
+    const malformedPrefs = await postUiPrefsJson('{not-json');
+    assert.equal(malformedPrefs.status, 400, 'rejects malformed UI preferences JSON');
+    const deepPrefs = await postUiPrefsJson(`{"foo":${'['.repeat(12_000)}null${']'.repeat(12_000)}}`);
+    assert.equal(deepPrefs.status, 400, 'rejects deeply nested unknown preferences');
+    assert.equal(readFileSync(prefsPath, 'utf8'), persistedPrefs);
+    assert.deepEqual(await getUiPrefs(), { success: true, prefs: mergedPrefs });
+
+    writeFileSync(prefsPath, JSON.stringify({ skin: 'prism', prismVariant: 'bad', foo: 'bar' }), 'utf8');
+    assert.deepEqual(await getUiPrefs(), {
+      success: true,
+      prefs: { skin: 'prism', prismVariant: 'auto', motion: 'full' },
+    });
+    writeFileSync(prefsPath, '{not-json', 'utf8');
+    assert.deepEqual(await getUiPrefs(), { success: true, prefs: defaultPrefs });
 
     // 3. Unauthorized POST must return 401
     const rUnauth = await fetch(`${base}/api/workspace/register`, {
@@ -2144,13 +2273,13 @@ async function runSelfTests() {
 
     await runUpdaterSelfTests({ SidecarApp, ResponseClass });
 
-    console.log(
-      `[antigravity-sidecar-studio --test] ALL PASSED (staticRoutes=${studio.staticInfo.count}, xlsx=${XLSX.version}, converters=${JSON.stringify(healthJson.converters)})`
-    );
+    testSummary = `staticRoutes=${studio.staticInfo.count}, xlsx=${XLSX.version}, converters=${JSON.stringify(healthJson.converters)}`;
   } finally {
     await studio.close();
     rmSync(tmpRoot, { recursive: true, force: true });
   }
+  assert.equal(existsSync(prefsPath), false, 'test cleanup removes the UI preferences file');
+  console.log(`[antigravity-sidecar-studio --test] ALL PASSED (${testSummary})`);
 }
 
 function buildTestZipBuffer(entries) {
@@ -2687,6 +2816,7 @@ if (isMain) {
       join(__dirname, 'lib', 'workspace.mjs'),
       join(__dirname, 'lib', 'office-converter.mjs'),
       join(__dirname, 'lib', 'transcript.mjs'),
+      join(__dirname, 'lib', 'ui-prefs.mjs'),
       join(__dirname, 'lib', 'updater.mjs'),
     ];
     for (const f of watchTargets) {

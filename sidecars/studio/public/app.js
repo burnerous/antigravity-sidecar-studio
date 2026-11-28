@@ -23,6 +23,27 @@
 
   const MAX_STAGED_COMMENTS = 50;
   const STAGED_STORAGE_PREFIX = 'ws-studio-staged-comments:';
+  const APPEARANCE_STORAGE_KEY = 'ws-studio-appearance';
+  const VALID_SKINS = new Set(['default', 'prism']);
+  const VALID_PRISM_VARIANTS = new Set(['auto', 'obsidian-dark', 'warm-charcoal', 'daylight-crystal', 'warm-alabaster']);
+  const VALID_MOTIONS = new Set(['full', 'reduced']);
+  const DEFAULT_APPEARANCE = { skin: 'default', prismVariant: 'auto', motion: 'full' };
+
+  function normalizeAppearance(raw) {
+    return {
+      skin: VALID_SKINS.has(raw?.skin) ? raw.skin : DEFAULT_APPEARANCE.skin,
+      prismVariant: VALID_PRISM_VARIANTS.has(raw?.prismVariant) ? raw.prismVariant : DEFAULT_APPEARANCE.prismVariant,
+      motion: VALID_MOTIONS.has(raw?.motion) ? raw.motion : DEFAULT_APPEARANCE.motion,
+    };
+  }
+
+  function loadStoredAppearance() {
+    try {
+      return normalizeAppearance(JSON.parse(global.localStorage.getItem(APPEARANCE_STORAGE_KEY)));
+    } catch {
+      return { ...DEFAULT_APPEARANCE };
+    }
+  }
 
   const state = {
     mode: 'workbench',
@@ -56,6 +77,10 @@
     pendingQuote: null,
     stagedComments: [],
     stagedPopoverOpen: false,
+    hostTheme: 'dark',
+    appearance: loadStoredAppearance(),
+    appearancePopoverOpen: false,
+    appearanceDirtyLocal: false,
     stagedStorageKeyLoaded: '',
     stagedSending: false,
     contextTarget: null,
@@ -80,7 +105,40 @@
     toastTimer = setTimeout(() => el.classList.add('is-hidden'), duration);
   }
 
-  // ---------- Host Theme Sync ----------
+  // ---------- Host Theme & Appearance Sync ----------
+  function applyAppearanceToDom() {
+    const { skin, prismVariant, motion } = state.appearance;
+    const docEl = document.documentElement;
+    docEl.dataset.skin = skin;
+    docEl.dataset.prismVariant = prismVariant;
+    docEl.dataset.motion = motion;
+
+    let effectiveTheme = state.hostTheme;
+    if (skin === 'prism') {
+      const resolved = prismVariant === 'auto'
+        ? (state.hostTheme === 'light' ? 'daylight-crystal' : 'obsidian-dark')
+        : prismVariant;
+      docEl.dataset.prismResolved = resolved;
+      effectiveTheme = resolved === 'daylight-crystal' || resolved === 'warm-alabaster' ? 'light' : 'dark';
+    } else {
+      docEl.removeAttribute('data-prism-resolved');
+    }
+
+    if (docEl.dataset.theme !== effectiveTheme) docEl.dataset.theme = effectiveTheme;
+    const hljsLink = $('hljs-theme');
+    const hljsHref = effectiveTheme === 'light' ? '/vendor/hljs-light.css' : '/vendor/hljs-dark.css';
+    if (hljsLink && hljsLink.getAttribute('href') !== hljsHref) hljsLink.href = hljsHref;
+
+    $('appearancePopover')?.querySelectorAll('[data-appearance-skin]').forEach((btn) => {
+      const selected = btn.dataset.appearanceSkin === skin
+        && (skin === 'default' || btn.dataset.appearanceVariant === prismVariant);
+      btn.setAttribute('aria-pressed', String(selected));
+    });
+    const motionInput = $('appearanceReducedMotionInput');
+    if (motionInput) motionInput.checked = motion === 'reduced';
+    $('appearanceBtn')?.classList.toggle('is-active', skin === 'prism' || state.appearancePopoverOpen);
+  }
+
   function syncThemeScheme() {
     const probe = document.createElement('span');
     probe.style.cssText = 'position:absolute;visibility:hidden;color:var(--background, #0f1117)';
@@ -88,18 +146,13 @@
     const c = getComputedStyle(probe).color;
     probe.remove();
     const nums = (c.match(/[\d.]+/g) || []).map(Number);
-    if (nums.length < 3) return;
-    const scale = c.startsWith('color(') ? 1 : 255;
-    const [r, g, b] = nums.slice(0, 3).map((v) => v / scale);
-    const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-    const theme = lum < 0.5 ? 'dark' : 'light';
-    if (document.documentElement.dataset.theme !== theme) {
-      document.documentElement.dataset.theme = theme;
-      const hljsLink = $('hljs-theme');
-      if (hljsLink) {
-        hljsLink.href = theme === 'dark' ? '/vendor/hljs-dark.css' : '/vendor/hljs-light.css';
-      }
+    if (nums.length >= 3) {
+      const scale = c.startsWith('color(') ? 1 : 255;
+      const [r, g, b] = nums.slice(0, 3).map((v) => v / scale);
+      const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      state.hostTheme = lum < 0.5 ? 'dark' : 'light';
     }
+    applyAppearanceToDom();
   }
 
   syncThemeScheme();
@@ -131,6 +184,76 @@
     if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`);
     return res.json();
   }
+
+  // ---------- Appearance Preferences ----------
+  let appearanceSave = Promise.resolve();
+
+  function saveStoredAppearance() {
+    try {
+      global.localStorage.setItem(APPEARANCE_STORAGE_KEY, JSON.stringify(state.appearance));
+    } catch {}
+  }
+
+  function setAppearance(patch) {
+    state.appearance = normalizeAppearance({ ...state.appearance, ...patch });
+    state.appearanceDirtyLocal = true;
+    applyAppearanceToDom();
+    saveStoredAppearance();
+
+    // Preserve selection order when the user makes rapid changes.
+    const appearance = state.appearance;
+    appearanceSave = appearanceSave.then(() => postJson('/api/ui/prefs', appearance)).catch(() => {});
+  }
+
+  async function hydrateAppearanceFromServer() {
+    try {
+      const data = await getJson('/api/ui/prefs');
+      if (data?.success !== true || !data.prefs || state.appearanceDirtyLocal) return;
+      state.appearance = normalizeAppearance({ ...state.appearance, ...data.prefs });
+      applyAppearanceToDom();
+      saveStoredAppearance();
+    } catch {}
+  }
+
+  function openAppearancePopover() {
+    if (state.updateModalOpen) return;
+    closeOpenTabsPopover();
+    closeStagedPopover();
+    $('treeContextMenu')?.classList.add('is-hidden');
+    $('tabContextMenu')?.classList.add('is-hidden');
+    state.appearancePopoverOpen = true;
+    $('appearancePopover').classList.remove('is-hidden');
+    $('appearanceBtn').setAttribute('aria-expanded', 'true');
+    applyAppearanceToDom();
+    $('appearanceCloseBtn').focus();
+  }
+
+  function closeAppearancePopover({ restoreFocus = false } = {}) {
+    if (!state.appearancePopoverOpen) return;
+    state.appearancePopoverOpen = false;
+    $('appearancePopover').classList.add('is-hidden');
+    const btn = $('appearanceBtn');
+    btn.setAttribute('aria-expanded', 'false');
+    applyAppearanceToDom();
+    if (restoreFocus) btn.focus();
+  }
+
+  function toggleAppearancePopover() {
+    if (state.appearancePopoverOpen) closeAppearancePopover({ restoreFocus: true });
+    else openAppearancePopover();
+  }
+
+  $('appearanceBtn').addEventListener('click', toggleAppearancePopover);
+  $('appearanceCloseBtn').addEventListener('click', () => closeAppearancePopover({ restoreFocus: true }));
+  $('appearancePopover').querySelectorAll('[data-appearance-skin]').forEach((btn) => {
+    btn.addEventListener('click', () => setAppearance({
+      skin: btn.dataset.appearanceSkin,
+      prismVariant: btn.dataset.appearanceVariant,
+    }));
+  });
+  $('appearanceReducedMotionInput').addEventListener('change', (e) => {
+    setAppearance({ motion: e.target.checked ? 'reduced' : 'full' });
+  });
 
   function uint8ToBase64(bytes) {
     const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
@@ -196,6 +319,11 @@
     if (e.key === 'Escape' && state.updateModalOpen) {
       e.preventDefault();
       closeUpdateModal({ restoreFocus: true });
+      return;
+    }
+    if (e.key === 'Escape' && state.appearancePopoverOpen) {
+      e.preventDefault();
+      closeAppearancePopover({ restoreFocus: true });
       return;
     }
     if (e.key === 'Escape' && state.stagedPopoverOpen) {
@@ -464,6 +592,7 @@
     $('tabContextMenu')?.classList.add('is-hidden');
     closeOpenTabsPopover();
     closeStagedPopover();
+    closeAppearancePopover();
     const menu = $('treeContextMenu');
     menu.classList.remove('is-hidden');
     const maxX = global.innerWidth - 205;
@@ -478,11 +607,12 @@
     if (!e.target.closest('#openTabsPopover, #openTabsPickerBtn')) {
       closeOpenTabsPopover();
     }
-    if (state.stagedPopoverOpen) {
-      const path = e.composedPath();
-      if (!path.includes($('stagedCommentsPopover')) && !path.includes($('stagedCommentsBtn'))) {
-        closeStagedPopover();
-      }
+    const path = e.composedPath();
+    if (state.stagedPopoverOpen && !path.includes($('stagedCommentsPopover')) && !path.includes($('stagedCommentsBtn'))) {
+      closeStagedPopover();
+    }
+    if (state.appearancePopoverOpen && !path.includes($('appearancePopover')) && !path.includes($('appearanceBtn'))) {
+      closeAppearancePopover();
     }
   });
 
@@ -1265,6 +1395,7 @@
   function openStagedPopover() {
     if (!state.stagedComments.length) return;
     closeOpenTabsPopover();
+    closeAppearancePopover();
     $('treeContextMenu').classList.add('is-hidden');
     $('tabContextMenu')?.classList.add('is-hidden');
     state.stagedPopoverOpen = true;
@@ -1732,6 +1863,7 @@
     const docs = getVisibleTabDocs();
     if (!docs.length) return;
     closeStagedPopover();
+    closeAppearancePopover();
     $('treeContextMenu')?.classList.add('is-hidden');
     $('tabContextMenu')?.classList.add('is-hidden');
     state.openTabsFilterQuery = '';
@@ -1750,6 +1882,7 @@
     $('treeContextMenu')?.classList.add('is-hidden');
     closeOpenTabsPopover();
     closeStagedPopover();
+    closeAppearancePopover();
 
     state.tabContextTarget = doc;
     const docs = getVisibleTabDocs();
@@ -2456,6 +2589,7 @@
 
   async function openUpdateModal() {
     closeStagedPopover();
+    closeAppearancePopover();
     state.updateModalOpen = true;
     $('updateModal').classList.remove('is-hidden');
     $('updateCenterBtn').setAttribute('aria-expanded', 'true');
@@ -2700,6 +2834,7 @@
   // ---------- Bootstrap ----------
   (async function bootstrap() {
     loadStagedComments();
+    void hydrateAppearanceFromServer();
     try {
       const health = await getJson('/api/health');
       state.capabilities = health.converters || {};

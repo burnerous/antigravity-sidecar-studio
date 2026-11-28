@@ -3057,3 +3057,295 @@ td.ws-pptx-editable:focus {
   }
 }
 
+/* Appearance switcher */
+.ws-appearance-popover {
+  position: fixed;
+  top: 44px;
+  right: 10px;
+  z-index: 82;
+  width: min(296px, calc(100vw - 20px));
+  max-height: calc(100vh - 58px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  background: var(--ws-surface);
+  border: 1px solid var(--ws-border-strong);
+  border-radius: 10px;
+  box-shadow: 0 12px 30px rgb(0 0 0 / 35%);
+  color: var(--ws-fg);
+}
+
+.ws-appearance-popover.is-hidden,
+.ws-appearance-popover[hidden] {
+  display: none !important;
+}
+
+.ws-appearance-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--ws-border);
+}
+
+.ws-appearance-title {
+  min-width: 0;
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.ws-appearance-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+}
+
+.ws-appearance-section {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+
+.ws-appearance-section-label {
+  margin: 0;
+  color: var(--ws-muted);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.ws-appearance-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ws-appearance-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+  min-width: 0;
+}
+
+.ws-appearance-option,
+.ws-appearance-palette {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--ws-border);
+  border-radius: 8px;
+  background: var(--ws-card);
+  color: var(--ws-fg);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.14s ease, background-color 0.14s ease, box-shadow 0.14s ease;
+}
+
+.ws-appearance-option:hover,
+.ws-appearance-palette:hover {
+  border-color: var(--ws-border-strong);
+  background: var(--ws-card-hover);
+}
+
+.ws-appearance-option[aria-pressed="true"],
+.ws-appearance-palette[aria-pressed="true"] {
+  border-color: var(--ws-primary);
+  background: var(--ws-primary-soft);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ws-primary) 35%, transparent);
+}
+
+.ws-appearance-option:focus-visible,
+.ws-appearance-palette:focus-visible {
+  outline: 2px solid var(--ws-primary);
+  outline-offset: 2px;
+}
+
+.ws-appearance-swatch {
+  position: relative;
+  display: block;
+  flex: 0 0 34px;
+  width: 34px;
+  height: 29px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--ws-fg) 24%, transparent);
+  border-radius: 6px;
+  background: var(--ws-card-hover);
+}
+
+.ws-appearance-swatch::after {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(132deg, transparent 44%, rgb(255 255 255 / 36%) 46%, transparent 49%);
+  content: "";
+  pointer-events: none;
+}
+
+.ws-appearance-swatch.is-default {
+  background: linear-gradient(135deg, #171a20 0 49%, #f7f8fa 51% 100%);
+}
+
+.ws-appearance-swatch.is-prism-auto {
+  background: linear-gradient(135deg, #09090b 0 48%, #dfeeff 52% 100%);
+}
+
+.ws-appearance-swatch.is-obsidian-dark {
+  background: linear-gradient(135deg, #070709, #16161b 60%, #2f2f38);
+}
+
+.ws-appearance-swatch.is-warm-charcoal {
+  background: linear-gradient(135deg, #171514, #302722 65%, #8b6448);
+}
+
+.ws-appearance-swatch.is-daylight-crystal {
+  background: linear-gradient(135deg, #ffffff, #dcecff 62%, #8ab4e4);
+}
+
+.ws-appearance-swatch.is-warm-alabaster {
+  background: linear-gradient(135deg, #fffdf7, #f1e8d8 65%, #c9a986);
+}
+
+.ws-appearance-option-meta,
+.ws-appearance-palette-meta {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ws-appearance-option-name {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.ws-appearance-option-desc {
+  color: var(--ws-muted);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.ws-appearance-check {
+  display: none;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--ws-primary);
+  color: var(--ws-primary-fg);
+  font-size: 10px;
+  line-height: 1;
+}
+
+.ws-appearance-option[aria-pressed="true"] .ws-appearance-check,
+.ws-appearance-palette[aria-pressed="true"] .ws-appearance-check {
+  display: inline-flex;
+}
+
+.ws-appearance-grid .ws-appearance-palette {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  padding: 7px;
+}
+
+.ws-appearance-grid .ws-appearance-swatch {
+  flex: 0 0 27px;
+  width: 100%;
+  height: 27px;
+}
+
+.ws-appearance-grid .ws-appearance-palette-meta {
+  padding-right: 1px;
+}
+
+.ws-appearance-grid .ws-appearance-palette[aria-pressed="true"] .ws-appearance-check {
+  position: absolute;
+  top: 11px;
+  right: 11px;
+  display: inline-flex;
+  box-shadow: 0 0 0 2px var(--ws-surface);
+}
+
+.ws-appearance-divider {
+  width: 100%;
+  height: 1px;
+  border: 0;
+  background: var(--ws-border);
+}
+
+.ws-appearance-toggle-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--ws-border);
+  border-radius: 8px;
+  background: var(--ws-card);
+  cursor: pointer;
+}
+
+.ws-appearance-toggle-row input {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  margin: 2px 0 0;
+  accent-color: var(--ws-primary);
+}
+
+.ws-appearance-toggle-text {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+@media (max-width: 440px) {
+  .ws-appearance-popover {
+    top: 42px;
+    right: 8px;
+    max-height: calc(100vh - 52px);
+  }
+
+  .ws-appearance-body {
+    gap: 10px;
+    padding: 10px;
+  }
+}
+
+@media (max-width: 360px) {
+  .ws-appearance-popover {
+    right: 6px;
+    width: calc(100vw - 12px);
+  }
+
+  .ws-appearance-header {
+    padding-right: 9px;
+    padding-left: 9px;
+  }
+
+  .ws-appearance-body {
+    padding-right: 8px;
+    padding-left: 8px;
+  }
+
+  .ws-appearance-grid {
+    gap: 5px;
+  }
+}
