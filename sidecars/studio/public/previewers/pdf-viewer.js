@@ -11,7 +11,9 @@
   function getPdfJs() {
     const lib = global.pdfjsLib;
     if (!lib) {
-      throw new Error('pdfjsLib 未加载，请检查本地 /vendor/pdfjs/pdf.min.js');
+      const err = new Error('离线 PDF 引擎 (pdf.js) 未加载');
+      err.code = 'VENDOR_MISSING';
+      throw err;
     }
     if (lib.GlobalWorkerOptions && !lib.GlobalWorkerOptions.workerSrc) {
       lib.GlobalWorkerOptions.workerSrc = '/vendor/pdfjs/pdf.worker.min.js';

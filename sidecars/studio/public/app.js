@@ -107,6 +107,12 @@
     tabContextTarget: null,
     openTabsFilterQuery: '',
     bootId: '',
+    backendVendorReady: true,
+    missingVendorAssets: [],
+    vendorBannerDismissed: false,
+    vendorRecoveryTimer: null,
+    refreshDirtyConfirmUntil: 0,
+    vendorForceReloadUntil: 0,
     updateStatus: null,
     updateModalOpen: false,
     updatePollTimer: null,
@@ -115,6 +121,184 @@
     updateDirtyConfirmTimer: null,
     updateCheckingNow: false,
   };
+
+  const VENDOR_AUTO_RELOAD_KEY = 'ws-studio-vendor-auto-reload-ts';
+  const REQUIRED_VENDOR_GLOBALS = [
+    { key: 'JSZip', label: 'JSZip', route: '/vendor/jszip.min.js', ready: () => typeof global.JSZip?.loadAsync === 'function' },
+    { key: 'docx', label: 'docx-preview', route: '/vendor/docx-preview.min.js', ready: () => typeof global.docx?.renderAsync === 'function' },
+    { key: 'mammoth', label: 'mammoth', route: '/vendor/mammoth.browser.min.js', ready: () => typeof global.mammoth?.convertToHtml === 'function' },
+    { key: 'XLSX', label: 'SheetJS (xlsx)', route: '/vendor/xlsx.full.min.js', ready: () => typeof global.XLSX?.read === 'function' && Boolean(global.XLSX?.utils) },
+    { key: 'marked', label: 'marked', route: '/vendor/marked.umd.js', ready: () => typeof global.marked?.parse === 'function' },
+    { key: 'DOMPurify', label: 'DOMPurify', route: '/vendor/purify.min.js', ready: () => typeof global.DOMPurify?.sanitize === 'function' },
+    { key: 'hljs', label: 'highlight.js', route: '/vendor/highlight.min.js', ready: () => Boolean(global.hljs) },
+    { key: 'pdfjsLib', label: 'pdf.js', route: '/vendor/pdfjs/pdf.min.js', ready: () => typeof global.pdfjsLib?.getDocument === 'function' },
+  ];
+  const CATEGORY_VENDOR_KEYS = {
+    docx: ['docx', 'JSZip', 'mammoth', 'DOMPurify'],
+    xlsx: ['XLSX'],
+    pptx: ['JSZip'],
+    pdf: ['pdfjsLib'],
+    markdown: ['marked', 'DOMPurify'],
+  };
+
+  function getMissingFrontendVendors() {
+    return REQUIRED_VENDOR_GLOBALS.filter((v) => !v.ready());
+  }
+
+  function getMissingVendorsForCategory(category) {
+    const keys = CATEGORY_VENDOR_KEYS[category];
+    if (!keys?.length) return [];
+    const keySet = new Set(keys);
+    return REQUIRED_VENDOR_GLOBALS.filter((v) => keySet.has(v.key) && !v.ready());
+  }
+
+  function buildVendorRepairCommand() {
+    const isWin = /win/i.test(navigator.platform || navigator.userAgent || '');
+    if (isWin) {
+      return 'cd "$env:USERPROFILE\\.gemini\\config\\plugins\\antigravity-sidecar-studio\\sidecars\\studio"; npm ci';
+    }
+    return 'cd ~/.gemini/config/plugins/antigravity-sidecar-studio/sidecars/studio && npm ci';
+  }
+
+  function stopVendorRecoveryWatcher() {
+    if (state.vendorRecoveryTimer) {
+      clearInterval(state.vendorRecoveryTimer);
+      state.vendorRecoveryTimer = null;
+    }
+  }
+
+  function syncVendorHealthUi(health) {
+    if (health && typeof health.vendorReady === 'boolean') {
+      state.backendVendorReady = health.vendorReady;
+      state.missingVendorAssets = Array.isArray(health.missingVendorAssets)
+        ? health.missingVendorAssets
+        : [];
+    }
+    const banner = $('wsVendorBanner');
+    const bannerText = $('wsVendorBannerText');
+    const copyBtn = $('wsVendorCopyCmdBtn');
+    const dismissBtn = $('wsVendorDismissBtn');
+    if (!banner || !bannerText) return;
+
+    const missingFrontend = getMissingFrontendVendors();
+    if (!state.backendVendorReady) {
+      banner.classList.remove('is-ready');
+      copyBtn?.classList.remove('is-hidden');
+      dismissBtn?.classList.remove('is-hidden');
+      const missingCount = state.missingVendorAssets.length || missingFrontend.length;
+      bannerText.textContent = `检测到缺少 ${missingCount} 项离线预览依赖（sidecars/studio/node_modules），请使用官方 Release 离线包覆盖安装或运行 npm ci 修复后再点击「重载面板」。`;
+      banner.classList.toggle('is-hidden', state.vendorBannerDismissed);
+      return;
+    }
+
+    if (missingFrontend.length > 0) {
+      state.vendorBannerDismissed = false;
+      banner.classList.add('is-ready');
+      copyBtn?.classList.add('is-hidden');
+      dismissBtn?.classList.add('is-hidden');
+      bannerText.textContent = '离线前端依赖已就绪，点击「重载面板」即可恢复文档预览（无需重启 Antigravity）。';
+      banner.classList.remove('is-hidden');
+      return;
+    }
+
+    banner.classList.add('is-hidden');
+    banner.classList.remove('is-ready');
+    stopVendorRecoveryWatcher();
+  }
+
+  function tryAutoReloadForVendorRecovery() {
+    if (!state.backendVendorReady || getMissingFrontendVendors().length === 0) return false;
+    if (state.activeController?.isDirty?.()) return false;
+    try {
+      const lastTs = Number(global.sessionStorage?.getItem(VENDOR_AUTO_RELOAD_KEY) || 0);
+      if (Number.isFinite(lastTs) && lastTs > 0 && Date.now() - lastTs < 15000) {
+        return false;
+      }
+      global.sessionStorage?.setItem(VENDOR_AUTO_RELOAD_KEY, String(Date.now()));
+    } catch {}
+    showToast('检测到离线依赖已就绪，正在自动重载工作台...', 1800);
+    global.location.reload();
+    return true;
+  }
+
+  function startVendorRecoveryWatcher() {
+    if (getMissingFrontendVendors().length === 0 && state.backendVendorReady) return;
+    if (state.vendorRecoveryTimer) return;
+    state.vendorRecoveryTimer = setInterval(async () => {
+      try {
+        const health = await getJson('/api/health');
+        if (!health?.success) return;
+        syncVendorHealthUi(health);
+        if (health.vendorReady === true) {
+          stopVendorRecoveryWatcher();
+          tryAutoReloadForVendorRecovery();
+        }
+      } catch {}
+    }, 3000);
+  }
+
+  async function requestPanelReload({ reason = 'manual', allowWhenMissing = false } = {}) {
+    if (state.activeController?.isDirty?.() && Date.now() >= state.refreshDirtyConfirmUntil) {
+      state.refreshDirtyConfirmUntil = Date.now() + 4000;
+      showToast('当前文档有未保存修改，请在 4 秒内再次点击以重载工作台', 3200);
+      return false;
+    }
+    state.refreshDirtyConfirmUntil = 0;
+
+    if (!allowWhenMissing) {
+      try {
+        const health = await getJson('/api/health');
+        if (health?.success) {
+          syncVendorHealthUi(health);
+          if (health.vendorReady === false) {
+            if (Date.now() >= state.vendorForceReloadUntil) {
+              state.vendorForceReloadUntil = Date.now() + 5000;
+              startVendorRecoveryWatcher();
+              const count = health.missingVendorCount || state.missingVendorAssets.length || getMissingFrontendVendors().length;
+              showToast(`仍检测到缺少 ${count} 项离线依赖，请先完成安装（5 秒内再次点击可强制重载）`, 3500);
+              return false;
+            }
+          }
+        }
+      } catch {}
+    }
+
+    state.vendorForceReloadUntil = 0;
+    if (reason === 'vendor-ready' || reason === 'boot-changed') {
+      showToast('检测到后台或依赖已更新，正在重载工作台...', 1500);
+    }
+    global.location.reload();
+    return true;
+  }
+
+  async function reloadIfBackendOrVendorUpdated() {
+    try {
+      const health = await getJson('/api/health');
+      if (health?.success) {
+        syncVendorHealthUi(health);
+        const bootChanged = Boolean(state.bootId && health.bootId && health.bootId !== state.bootId);
+        const vendorNeedsReload = getMissingFrontendVendors().length > 0 && health.vendorReady === true;
+        if (bootChanged || vendorNeedsReload) {
+          return await requestPanelReload({
+            reason: bootChanged ? 'boot-changed' : 'vendor-ready',
+            allowWhenMissing: true,
+          });
+        }
+      }
+    } catch {}
+    return false;
+  }
+
+  $('wsVendorCopyCmdBtn')?.addEventListener('click', () => {
+    copyText(buildVendorRepairCommand(), '已复制离线依赖修复命令');
+  });
+  $('wsVendorReloadBtn')?.addEventListener('click', () => {
+    requestPanelReload({ reason: 'banner-reload' });
+  });
+  $('wsVendorDismissBtn')?.addEventListener('click', () => {
+    state.vendorBannerDismissed = true;
+    $('wsVendorBanner')?.classList.add('is-hidden');
+  });
 
   let toastTimer = null;
   function showToast(msg, duration = 2200) {
@@ -1021,6 +1205,11 @@
           badge.classList.add('is-hidden');
         }
       },
+      onRenderError: (err) => {
+        if (openSeq === state.previewOpenSeq) {
+          renderPreviewErrorCard(stage, err, file);
+        }
+      },
       onQuoteRequest: ({ text, locationLabel }) => {
         openQuoteModal({ text, locationLabel });
       },
@@ -1055,17 +1244,95 @@
     } catch (err) {
       runCleanups();
       if (openSeq !== state.previewOpenSeq) return;
-      const warnIcon = WSIcons?.render ? WSIcons.render('ui-warn', { size: 36 }) : '';
-      stage.innerHTML = `<div class="ws-empty-welcome">
-        <div class="ws-empty-hero" style="color:var(--ws-warn);">${warnIcon}</div>
-        <h3>文档预览失败</h3>
-        <p>${String(err?.message || err).replace(/</g, '&lt;')}</p>
-      </div>`;
+      renderPreviewErrorCard(stage, err, file);
     }
   }
 
-  $('previewRefreshBtn').addEventListener('click', () => {
+  function renderPreviewErrorCard(stage, err, file) {
+    const msg = String(err?.message || err || '未知错误');
+    const missingForCat = getMissingVendorsForCategory(file?.category);
+    const missingAny = getMissingFrontendVendors();
+    const looksLikeVendorCrash =
+      err?.code === 'VENDOR_MISSING' ||
+      missingForCat.length > 0 ||
+      /reading '(?:renderAsync|convertToHtml|loadAsync|read|parse|sanitize)'/i.test(msg);
+
+    const card = document.createElement('div');
+    card.className = 'ws-empty-welcome';
+
+    const hero = document.createElement('div');
+    hero.className = 'ws-empty-hero';
+    hero.style.color = 'var(--ws-warn)';
+    if (WSIcons?.render) hero.innerHTML = WSIcons.render('ui-warn', { size: 36 });
+
+    const title = document.createElement('h3');
+    const desc = document.createElement('p');
+    card.append(hero, title, desc);
+
+    if (looksLikeVendorCrash) {
+      startVendorRecoveryWatcher();
+      const missingList = missingForCat.length ? missingForCat : missingAny;
+      if (state.backendVendorReady) {
+        title.textContent = '需要重载面板以启用文档预览';
+        desc.textContent =
+          '离线前端库已在磁盘就绪，但当前界面是在依赖补装前打开的。请点击下方「重载面板」或右上角刷新按钮完成加载（无需重启 Antigravity）。';
+      } else {
+        title.textContent = '缺少离线预览依赖 (node_modules)';
+        desc.textContent =
+          '检测到插件目录缺少离线前端依赖（常见于通过源码包或第三方市场安装）。请改用官方 Release 离线整合包覆盖安装，或在插件 sidecars/studio 目录运行 npm ci 后点击「重载面板」。';
+      }
+
+      if (missingList.length > 0) {
+        const detail = document.createElement('p');
+        detail.className = 'ws-error-detail';
+        detail.textContent = `未加载组件：${missingList.map((v) => v.label).join('、')}`;
+        card.appendChild(detail);
+      }
+
+      const actions = document.createElement('div');
+      actions.className = 'ws-error-actions';
+
+      const reloadBtn = document.createElement('button');
+      reloadBtn.type = 'button';
+      reloadBtn.className = 'ws-btn-primary ws-btn-xs';
+      reloadBtn.textContent = '重载面板';
+      reloadBtn.addEventListener('click', () => {
+        requestPanelReload({ reason: 'error-card' });
+      });
+      actions.appendChild(reloadBtn);
+
+      if (!state.backendVendorReady) {
+        const copyBtn = document.createElement('button');
+        copyBtn.type = 'button';
+        copyBtn.className = 'ws-btn-ghost ws-btn-xs';
+        copyBtn.textContent = '复制修复命令';
+        copyBtn.addEventListener('click', () => {
+          copyText(buildVendorRepairCommand(), '已复制离线依赖修复命令');
+        });
+        actions.appendChild(copyBtn);
+      }
+
+      if (file?.uri) {
+        const nativeBtn = document.createElement('button');
+        nativeBtn.type = 'button';
+        nativeBtn.className = 'ws-btn-ghost ws-btn-xs';
+        nativeBtn.textContent = '原生打开';
+        nativeBtn.addEventListener('click', () => openInNativeTab(file));
+        actions.appendChild(nativeBtn);
+      }
+
+      card.appendChild(actions);
+    } else {
+      title.textContent = '文档预览失败';
+      desc.textContent = msg;
+    }
+
+    stage.replaceChildren(card);
+  }
+
+  $('previewRefreshBtn').addEventListener('click', async () => {
     global.WSPrismMotion?.triggerRefreshSpin?.($('previewRefreshBtn'));
+    if (await reloadIfBackendOrVendorUpdated()) return;
     if (state.activeFile) openFilePreview(state.activeFile, { preserveState: true });
   });
   $('previewLocateTreeBtn')?.addEventListener('click', () => {
@@ -2319,6 +2586,7 @@
 
   $('globalRefreshBtn').addEventListener('click', async () => {
     global.WSPrismMotion?.triggerRefreshSpin?.($('globalRefreshBtn'));
+    if (await reloadIfBackendOrVendorUpdated()) return;
     await reloadExpandedDirs();
     await pollProducedDocs();
     if (state.activeFile) await openFilePreview(state.activeFile, { preserveState: true });
@@ -2923,7 +3191,18 @@
       if (Number.isFinite(health?.generation)) {
         state.workspaceGen = Math.max(state.workspaceGen, health.generation);
       }
-    } catch {}
+      syncVendorHealthUi(health);
+      if (getMissingFrontendVendors().length > 0 || health?.vendorReady === false) {
+        if (health?.vendorReady === true && tryAutoReloadForVendorRecovery()) {
+          return;
+        }
+        startVendorRecoveryWatcher();
+      }
+    } catch {
+      if (getMissingFrontendVendors().length > 0) {
+        startVendorRecoveryWatcher();
+      }
+    }
 
     const initialUpdateStatus = await refreshUpdateStatus();
     if (initialUpdateStatus?.justUpdated && initialUpdateStatus.lastUpdate?.toVersion) {
@@ -2990,6 +3269,7 @@
       global.removeEventListener('popstate', onPopState);
       for (const id of state.pollTimers) clearInterval(id);
       state.pollTimers = [];
+      stopVendorRecoveryWatcher();
       stopUpdatePolling();
       resetUpdateDirtyConfirm();
       try {

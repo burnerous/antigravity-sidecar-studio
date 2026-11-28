@@ -194,6 +194,12 @@
       throw new Error(`表格文件过大（${Math.round(buf.byteLength / 1024 / 1024)} MB > 32 MB 解析上限）`);
     }
 
+    if (typeof global.XLSX?.read !== 'function' || !global.XLSX?.utils) {
+      const err = new Error('离线表格引擎 (SheetJS / xlsx) 未加载');
+      err.code = 'VENDOR_MISSING';
+      throw err;
+    }
+
     let csvMeta = null;
     let csvAllRows = null;
     let wb;

@@ -8,6 +8,12 @@
     return f(url, options);
   }
 
+  function makeVendorMissingError(message) {
+    const err = new Error(message);
+    err.code = 'VENDOR_MISSING';
+    return err;
+  }
+
   const WORD_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
   const XML_NS = 'http://www.w3.org/XML/1998/namespace';
 
@@ -302,6 +308,7 @@
       prevState,
       onStatusBadge,
       onSaveFile,
+      onRenderError,
       showToast,
       registerCleanup,
     } = ctx;
@@ -579,10 +586,16 @@
       btnNative.type = 'button';
       btnNative.textContent = '排版视图';
       btnNative.className = viewMode === 'native' ? 'is-active' : '';
+      const runModeSwitch = () => {
+        renderCurrentMode().catch((err) => {
+          if (!destroyed && !ctx.isStale?.()) onRenderError?.(err);
+        });
+      };
+
       btnNative.addEventListener('click', () => {
         if (viewMode === 'native') return;
         viewMode = 'native';
-        renderCurrentMode();
+        runModeSwitch();
       });
 
       const btnReader = document.createElement('button');
@@ -593,7 +606,7 @@
         if (viewMode === 'reader') return;
         if (dirty) await buildModifiedDocxUint8();
         viewMode = 'reader';
-        renderCurrentMode();
+        runModeSwitch();
       });
 
       seg.append(btnNative, btnReader);
@@ -607,7 +620,7 @@
           if (viewMode === 'pdf') return;
           if (dirty) await saveDocxChanges({ silent: true });
           viewMode = 'pdf';
-          renderCurrentMode();
+          runModeSwitch();
         });
         seg.appendChild(btnPdf);
       }
@@ -636,7 +649,7 @@
             }
             editMode = !editMode;
           }
-          renderCurrentMode();
+          runModeSwitch();
         });
 
         autoSaveBtn = document.createElement('button');
@@ -708,7 +721,9 @@
         tocBtn.innerHTML = `${tocIcon}<span>大纲</span>`;
         tocBtn.addEventListener('click', () => {
           showToc = !showToc;
-          renderCurrentMode();
+          renderCurrentMode().catch((err) => {
+            if (!destroyed && !ctx.isStale?.()) onRenderError?.(err);
+          });
         });
         right.appendChild(tocBtn);
         toolbarEl.appendChild(right);
@@ -746,6 +761,10 @@
       wrapper.append(styleBox, zoomBox);
       stageEl.appendChild(wrapper);
 
+      if (typeof global.docx?.renderAsync !== 'function' || !global.JSZip) {
+        throw makeVendorMissingError('离线 Word 排版引擎 (docx-preview / JSZip) 未加载');
+      }
+
       if (editMode && canEdit) {
         await ensureDocxXmlLoaded();
       }
@@ -772,7 +791,9 @@
       } else if (canEdit) {
         zoomBox.addEventListener('dblclick', () => {
           editMode = true;
-          renderCurrentMode();
+          renderCurrentMode().catch((err) => {
+            if (!destroyed && !ctx.isStale?.()) onRenderError?.(err);
+          });
           showToast?.('已开启「编辑」，点击段落或表格即可直接修改', 1800);
         });
       }
@@ -785,6 +806,9 @@
     async function renderReaderDocx() {
       onStatusBadge?.('mammoth 精简阅读');
       stageEl.innerHTML = '';
+      if (typeof global.mammoth?.convertToHtml !== 'function' || typeof global.DOMPurify?.sanitize !== 'function') {
+        throw makeVendorMissingError('离线 Word 阅读引擎 (mammoth / DOMPurify) 未加载');
+      }
       const res = await global.mammoth.convertToHtml({ arrayBuffer: currentBuffer.slice(0) });
       if (destroyed || ctx.isStale?.()) return;
       const safeHtml = global.DOMPurify.sanitize(res.value || '<p>（空白文档）</p>', {

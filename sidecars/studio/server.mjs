@@ -40,7 +40,12 @@ import {
   resolveAppDataDir,
   SecurityManager,
 } from './lib/security.mjs';
-import { registerAllStaticAssets, STATIC_MIME_TYPES } from './lib/static-registry.mjs';
+import {
+  createDynamicVendorDirHandler,
+  getVendorManifest,
+  registerAllStaticAssets,
+  STATIC_MIME_TYPES,
+} from './lib/static-registry.mjs';
 import {
   extractProducedDocs,
   readFullTranscriptStep,
@@ -234,6 +239,8 @@ export function createStudioServer({
   const uiPrefs = new UiPrefsStore({ dataDir: resolvedDataDir });
 
   const staticInfo = registerAllStaticAssets(app, ResponseClass, studioDir);
+  const dynamicVendorDirHandler =
+    staticInfo.missingVendorDirs.length > 0 ? createDynamicVendorDirHandler(studioDir) : null;
 
   const origRun = app.run.bind(app);
   app.run = async () => {
@@ -333,6 +340,17 @@ export function createStudioServer({
             else pipeFile({ start, end });
             return;
           }
+          if (dynamicVendorDirHandler && parsedUrl.pathname.startsWith('/vendor/pdfjs/')) {
+            const vendorRes = dynamicVendorDirHandler(parsedUrl.pathname);
+            if (vendorRes) {
+              res.writeHead(vendorRes.status, {
+                'Content-Type': vendorRes.contentType,
+                ...vendorRes.headers,
+              });
+              res.end(req.method === 'HEAD' ? undefined : vendorRes.body);
+              return;
+            }
+          }
         } catch (err) {
           if (res.headersSent) {
             res.destroy(err);
@@ -411,6 +429,7 @@ export function createStudioServer({
     () => {
       const caps = converter.getCapabilities();
       const upd = updater.getStatus();
+      const missingVendorAssets = staticInfo.getMissingVendorAssets();
       return jsonResponse(ResponseClass, {
         success: true,
         status: 'ok',
@@ -423,6 +442,9 @@ export function createStudioServer({
         generation: security.getGeneration(),
         hostLockedRoots: security.hasHostLockedRoots(),
         staticAssets: staticInfo.count,
+        vendorReady: missingVendorAssets.length === 0,
+        missingVendorCount: missingVendorAssets.length,
+        missingVendorAssets,
       });
     },
     'GET'
@@ -1380,6 +1402,8 @@ async function runSelfTests() {
     assert.equal(rHome.status, 200);
     const homeHtml = await rHome.text();
     assert.ok(homeHtml.includes('/preload.js'), 'index.html must include /preload.js');
+    assert.ok(homeHtml.includes('id="wsVendorBanner"'), 'index.html must include #wsVendorBanner');
+    assert.ok(homeHtml.includes('id="wsVendorReloadBtn"'), 'index.html must include #wsVendorReloadBtn');
     const imageScript = homeHtml.indexOf('<script src="/previewers/image-viewer.js"></script>');
     const appScript = homeHtml.indexOf('<script src="/app.js"></script>');
     assert.ok(imageScript >= 0 && imageScript < appScript, 'image previewer must load before app.js');
@@ -1789,6 +1813,9 @@ async function runSelfTests() {
     assert.equal(rHealth.status, 200);
     const healthJson = await rHealth.json();
     assert.equal(healthJson.success, true);
+    assert.equal(healthJson.vendorReady, true, 'Healthy studio must report vendorReady=true');
+    assert.equal(healthJson.missingVendorCount, 0, 'Healthy studio must report 0 missing vendors');
+    assert.deepEqual(healthJson.missingVendorAssets, [], 'Healthy studio must report empty missingVendorAssets');
 
     // UI preferences (defaults, authentication, validation, and disk persistence).
     const prefsUrl = `${base}/api/ui/prefs`;
@@ -2577,6 +2604,173 @@ async function runSelfTests() {
 
     assert.equal(typeof healthJson.version, 'string', 'health exposes version');
     assert.ok(healthJson.bootId, 'health exposes bootId');
+
+    // 12. Degraded startup (missing node_modules) -> hot vendor restoration without server restart
+    const degradedStudioDir = join(tmpRoot, 'degraded-studio');
+    cpSync(join(__dirname, 'public'), join(degradedStudioDir, 'public'), { recursive: true });
+    const degradedStudio = createStudioServer({
+      SidecarApp,
+      Response: ResponseClass,
+      appDataDir,
+      cacheDir,
+      studioDir: degradedStudioDir,
+    });
+    assert.ok(degradedStudio.staticInfo.missing.length > 0, 'Degraded startup must record missing vendor assets');
+    assert.equal(
+      degradedStudio.staticInfo.missingVendorDirs.length,
+      3,
+      'Degraded startup must record all 3 missing pdfjs vendor dirs'
+    );
+    try {
+      const degradedServer = await degradedStudio.app.run();
+      const degradedBase = `http://127.0.0.1:${degradedServer.address().port}`;
+
+      const rDegHealthBefore = await fetch(`${degradedBase}/api/health`);
+      assert.equal(rDegHealthBefore.status, 200);
+      const degHealthBefore = await rDegHealthBefore.json();
+      assert.equal(degHealthBefore.vendorReady, false);
+      assert.equal(degHealthBefore.missingVendorCount, 15);
+      assert.equal(degHealthBefore.missingVendorAssets.length, 15);
+      for (const route of degHealthBefore.missingVendorAssets) {
+        assert.ok(route.startsWith('/vendor/'), `missingVendorAssets must only expose logical route: ${route}`);
+        assert.equal(route.includes('\\'), false, 'missingVendorAssets must not expose Windows paths');
+      }
+
+      for (const route of [
+        '/vendor/docx-preview.min.js',
+        '/vendor/jszip.min.js',
+        '/vendor/pdfjs/cmaps/Adobe-GB1-UCS2.bcmap',
+      ]) {
+        const res = await fetch(`${degradedBase}${route}`);
+        assert.equal(res.status, 503, `Missing vendor route ${route} must return 503 before restore`);
+        assert.equal(res.headers.get('cache-control'), 'no-store');
+      }
+
+      for (const badPath of [
+        '/vendor/pdfjs/cmaps/..%2F..%2Fpackage.json',
+        '/vendor/pdfjs/cmaps/..%5C..%5Cpackage.json',
+      ]) {
+        const res = await fetch(`${degradedBase}${badPath}`);
+        assert.equal(res.status, 400, `Path traversal must be rejected: ${badPath}`);
+      }
+
+      // Populate vendor files on disk WITHOUT restarting degradedStudio
+      const manifest = getVendorManifest(degradedStudioDir);
+      for (const [route, diskPath] of manifest.vendorFiles) {
+        mkdirSync(dirname(diskPath), { recursive: true });
+        const content = route.endsWith('.js')
+          ? `/* restored ${route} */`
+          : `/* css ${route} */`;
+        writeFileSync(diskPath, content, 'utf8');
+      }
+      const cmapBytes = Buffer.from([1, 2, 3, 4]);
+      const cmapFile = join(manifest.vendorDirs[0][1], 'Adobe-GB1-UCS2.bcmap');
+      mkdirSync(manifest.vendorDirs[0][1], { recursive: true });
+      writeFileSync(cmapFile, cmapBytes);
+      mkdirSync(manifest.vendorDirs[1][1], { recursive: true });
+      writeFileSync(join(manifest.vendorDirs[1][1], 'FoxitFixed.pfb'), Buffer.from('pfb'));
+      mkdirSync(manifest.vendorDirs[2][1], { recursive: true });
+      writeFileSync(join(manifest.vendorDirs[2][1], 'annotation-note.svg'), '<svg/>', 'utf8');
+
+      const rDocxVendor = await fetch(`${degradedBase}/vendor/docx-preview.min.js`);
+      assert.equal(rDocxVendor.status, 200, 'Restored vendor bundle must serve 200 without restart');
+      assert.match(rDocxVendor.headers.get('content-type'), /^application\/javascript/);
+      assert.equal(await rDocxVendor.text(), '/* restored /vendor/docx-preview.min.js */');
+
+      const rJszipVendor = await fetch(`${degradedBase}/vendor/jszip.min.js`);
+      assert.equal(rJszipVendor.status, 200);
+
+      const rCmap = await fetch(`${degradedBase}/vendor/pdfjs/cmaps/Adobe-GB1-UCS2.bcmap`);
+      assert.equal(rCmap.status, 200, 'Restored pdfjs cmap must serve 200 without restart');
+      assert.equal(rCmap.headers.get('content-type'), 'application/octet-stream');
+      assert.deepEqual(Buffer.from(await rCmap.arrayBuffer()), cmapBytes);
+
+      const rCmapHead = await fetch(`${degradedBase}/vendor/pdfjs/cmaps/Adobe-GB1-UCS2.bcmap`, {
+        method: 'HEAD',
+      });
+      assert.equal(rCmapHead.status, 200);
+      assert.equal((await rCmapHead.arrayBuffer()).byteLength, 0);
+
+      const rCmapMissing = await fetch(`${degradedBase}/vendor/pdfjs/cmaps/does-not-exist.bcmap`);
+      assert.equal(rCmapMissing.status, 404);
+
+      const rTraversalAfter = await fetch(`${degradedBase}/vendor/pdfjs/cmaps/..%2Fpackage.json`);
+      assert.equal(rTraversalAfter.status, 400);
+
+      const rDegHealthAfter = await fetch(`${degradedBase}/api/health`);
+      assert.equal(rDegHealthAfter.status, 200);
+      const degHealthAfter = await rDegHealthAfter.json();
+      assert.equal(degHealthAfter.vendorReady, true);
+      assert.equal(degHealthAfter.missingVendorCount, 0);
+      assert.deepEqual(degHealthAfter.missingVendorAssets, []);
+    } finally {
+      await degradedStudio.close();
+    }
+
+    // 13. Previewer missing-vendor guard check (docx-viewer.js throws VENDOR_MISSING instead of TypeError)
+    {
+      const { runInNewContext } = await import('node:vm');
+      const rDocxViewer = await fetch(`${base}/previewers/docx-viewer.js`);
+      assert.equal(rDocxViewer.status, 200);
+      const docxViewerSource = await rDocxViewer.text();
+
+      class MockEl {
+        constructor(tag = 'div') {
+          this.tagName = String(tag).toUpperCase();
+          this.children = [];
+          this.className = '';
+          this.textContent = '';
+          this.innerHTML = '';
+          this.style = {};
+          const cls = new Set();
+          this.classList = {
+            add: (c) => cls.add(c),
+            remove: (c) => cls.delete(c),
+            toggle: (c, f) => (f === undefined ? (cls.has(c) ? cls.delete(c) : cls.add(c)) : (f ? cls.add(c) : cls.delete(c))),
+            contains: (c) => cls.has(c),
+          };
+        }
+        append(...nodes) {
+          this.children.push(...nodes);
+        }
+        appendChild(node) {
+          this.children.push(node);
+          return node;
+        }
+        addEventListener() {}
+      }
+
+      const docxWindow = {
+        addEventListener() {},
+        removeEventListener() {},
+        fetch: async () => ({
+          ok: true,
+          arrayBuffer: async () => new Uint8Array([0x50, 0x4b, 0x03, 0x04]).buffer,
+        }),
+        ResizeObserver: class {
+          observe() {}
+          disconnect() {}
+        },
+        document: {
+          createElement: (tag) => new MockEl(tag),
+        },
+      };
+      runInNewContext(docxViewerSource, {
+        window: docxWindow,
+        document: docxWindow.document,
+        ResizeObserver: docxWindow.ResizeObserver,
+      });
+      await assert.rejects(
+        docxWindow.WSModules.renderDocxPreview({
+          file: { path: sampleDoc, mtimeMs: Date.now() },
+          stageEl: new MockEl(),
+          toolbarEl: new MockEl(),
+          capabilities: {},
+          conversationId: '',
+        }),
+        (err) => err?.code === 'VENDOR_MISSING' && /docx-preview/.test(err.message)
+      );
+    }
 
     await runUpdaterSelfTests({ SidecarApp, ResponseClass });
 

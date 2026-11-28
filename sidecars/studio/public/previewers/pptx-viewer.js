@@ -281,6 +281,11 @@
   }
 
   async function parsePptxBuffer(buffer, { blobUrls = [], isDestroyed = null } = {}) {
+    if (typeof global.JSZip?.loadAsync !== 'function') {
+      const err = new Error('离线幻灯片解析引擎 (JSZip) 未加载');
+      err.code = 'VENDOR_MISSING';
+      throw err;
+    }
     const zip = await global.JSZip.loadAsync(buffer);
 
     const readText = async (path) => {

@@ -200,7 +200,7 @@
 }
 
 :root[data-skin="prism"] #ws-app > :where(
-  #wsStartupError, .ws-topbar, .ws-produced-strip, .ws-workbench, .ws-trajectory-pane
+  #wsStartupError, #wsVendorBanner, .ws-topbar, .ws-produced-strip, .ws-workbench, .ws-trajectory-pane
 ) {
   position: relative;
 }

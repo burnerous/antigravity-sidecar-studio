@@ -1123,6 +1123,80 @@ input::placeholder, textarea::placeholder {
   gap: 7px;
 }
 
+.ws-vendor-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 10px;
+  background: color-mix(in srgb, var(--ws-warn) 14%, var(--ws-surface));
+  color: var(--ws-fg);
+  border-bottom: 1px solid color-mix(in srgb, var(--ws-warn) 42%, var(--ws-border));
+  font-size: 11.5px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+.ws-vendor-banner.is-ready {
+  background: color-mix(in srgb, var(--ws-success) 13%, var(--ws-surface));
+  border-bottom-color: color-mix(in srgb, var(--ws-success) 42%, var(--ws-border));
+}
+
+.ws-vendor-banner-body {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  flex: 1 1 240px;
+}
+
+.ws-vendor-banner-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ws-warn);
+  flex-shrink: 0;
+}
+
+.ws-vendor-banner.is-ready .ws-vendor-banner-icon {
+  color: var(--ws-success);
+}
+
+.ws-vendor-banner-text {
+  min-width: 0;
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.ws-vendor-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.ws-vendor-banner-actions .ws-btn-xs,
+.ws-error-actions .ws-btn-xs {
+  padding: 3px 9px;
+  font-size: 11px;
+  border-radius: 6px;
+}
+
+.ws-error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.ws-error-detail {
+  margin-top: 8px !important;
+  font-size: 11px !important;
+  opacity: 0.85;
+  word-break: break-word;
+}
+
 /* Native MP4 Video Preview */
 .ws-video-shell {
   --ws-video-shadow: 0 12px 36px rgb(0 0 0 / 28%);

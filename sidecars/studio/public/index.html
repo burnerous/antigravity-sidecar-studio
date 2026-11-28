@@ -72,6 +72,18 @@
       <button type="button" onclick="this.parentElement.classList.add('is-hidden')" style="border:none;background:transparent;color:#fecaca;cursor:pointer;font-size:14px;line-height:1;padding:0 4px;" aria-label="关闭错误提示">&times;</button>
     </div>
 
+    <div id="wsVendorBanner" class="ws-vendor-banner is-hidden" role="alert">
+      <div class="ws-vendor-banner-body">
+        <span class="ws-vendor-banner-icon" data-ws-icon="ui-warn" data-size="14"></span>
+        <span id="wsVendorBannerText" class="ws-vendor-banner-text"></span>
+      </div>
+      <div class="ws-vendor-banner-actions">
+        <button id="wsVendorCopyCmdBtn" class="ws-btn-ghost ws-btn-xs" type="button">复制修复命令</button>
+        <button id="wsVendorReloadBtn" class="ws-btn-primary ws-btn-xs" type="button">重载面板</button>
+        <button id="wsVendorDismissBtn" class="ws-icon-btn ws-btn-sm" type="button" aria-label="收起提示">&times;</button>
+      </div>
+    </div>
+
     <!-- Top Workbench Navigation Bar -->
     <header class="ws-topbar">
       <div class="ws-topbar-left">

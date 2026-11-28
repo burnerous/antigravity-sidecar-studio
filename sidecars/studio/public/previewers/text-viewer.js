@@ -211,6 +211,7 @@
       prevState,
       onStatusBadge,
       onSaveFile,
+      onRenderError,
       showToast,
       registerCleanup,
     } = ctx;
@@ -348,6 +349,11 @@
 
     function renderMarkdownInto(article, sourceText = text, { token, renderer } = {}) {
       const marked = global.marked;
+      if (typeof marked?.parse !== 'function' || typeof global.DOMPurify?.sanitize !== 'function') {
+        const err = new Error('离线 Markdown 渲染引擎 (marked / DOMPurify) 未加载');
+        err.code = 'VENDOR_MISSING';
+        throw err;
+      }
       const rawHtml = token?.type === 'def' ? ''
         : token && marked.parser ? marked.parser([token], renderer ? { ...marked.defaults, renderer } : undefined)
         : marked.parse(sourceText.replace(/^\uFEFF/, ''));
@@ -973,7 +979,16 @@
           disposeLiveView?.();
           mdMode = m.key;
           syncToolbarActiveState();
-          renderActiveView(m.key === 'edit' || m.key === 'split');
+          try {
+            renderActiveView(m.key === 'edit' || m.key === 'split');
+          } catch (err) {
+            if (typeof onRenderError === 'function') {
+              textDestroy();
+              onRenderError(err);
+            } else {
+              throw err;
+            }
+          }
         });
         modeButtons.set(m.key, btn);
         seg.appendChild(btn);
